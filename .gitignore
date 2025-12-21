@@ -152,3 +152,5 @@ yarn-error.log*
 # Backup files
 *.backup
 *.bak
+# clerk configuration (can include secrets)
+/.clerk/

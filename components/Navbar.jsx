@@ -3,7 +3,7 @@
 
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
-import { usePathname } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 
 const cx = (...c) => c.filter(Boolean).join(" ")
 
@@ -25,6 +25,8 @@ function Wordmark() {
 
 export default function Navbar() {
     const pathname = usePathname()
+    const router = useRouter()
+
     const [open, setOpen] = useState(false)
     const [scrolled, setScrolled] = useState(false)
     const [activeHash, setActiveHash] = useState("#home")
@@ -56,6 +58,8 @@ export default function Navbar() {
     }, [open])
 
     useEffect(() => {
+        if (pathname !== "/") return
+
         const sections = items.map((i) => document.querySelector(i.href)).filter(Boolean)
         if (!sections.length) return
 
@@ -71,12 +75,18 @@ export default function Navbar() {
 
         sections.forEach((s) => observer.observe(s))
         return () => observer.disconnect()
-    }, [items])
+    }, [items, pathname])
 
     const goTo = (href) => (e) => {
         if (!href.startsWith("#")) return
         e.preventDefault()
         setOpen(false)
+
+        if (pathname !== "/") {
+            router.push(`/${href}`)
+            return
+        }
+
         const el = document.querySelector(href)
         if (el) el.scrollIntoView({ behavior: "smooth", block: "start" })
         else window.location.hash = href
@@ -109,7 +119,7 @@ export default function Navbar() {
                                 return (
                                     <a
                                         key={it.href}
-                                        href={it.href}
+                                        href={isHome ? it.href : `/${it.href}`}
                                         onClick={goTo(it.href)}
                                         className={cx(
                                             "text-sm font-medium px-3 py-2 rounded-xl transition",
@@ -191,7 +201,7 @@ export default function Navbar() {
                                     return (
                                         <a
                                             key={it.href}
-                                            href={it.href}
+                                            href={isHome ? it.href : `/${it.href}`}
                                             onClick={goTo(it.href)}
                                             className={cx(
                                                 "rounded-xl px-4 py-3 text-sm font-medium transition border",
