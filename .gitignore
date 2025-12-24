@@ -154,3 +154,5 @@ yarn-error.log*
 *.bak
 # clerk configuration (can include secrets)
 /.clerk/
+
+/app/generated/prisma
