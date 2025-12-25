@@ -1,3 +1,4 @@
+// FILE: prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -7,17 +8,63 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Currency {
+  GBP
+  USD
+  EUR
+  CAD
+  AUD
+  JPY
+}
+
+enum ItemCondition {
+  NEW
+  LIKE_NEW
+  GOOD
+  FAIR
+  POOR
+}
+
+enum ItemCategory {
+  CLOTHING
+  SHOES
+  TECH
+  COLLECTIBLES
+  TRADING_CARDS
+  WATCHES
+  BAGS
+  HOME
+  BOOKS
+  TOYS
+  BEAUTY
+  OTHER
+}
+
 model Item {
   id        String   @id @default(cuid())
-  userId    String   // Clerk user id
+  userId    String
   name      String
+
   sku       String?
-  quantity  Int      @default(0)
-  costPence Int      @default(0)
+  quantity  Int      @default(1)
+
+  // prices stored in pence (minor units) for the chosen currency
+  currency          Currency      @default(GBP)
+  purchasePence     Int           @default(0)  // what you paid (per unit)
+
+  expectedBestPence Int?          // expected sale best (per unit)
+  expectedWorstPence Int?         // expected sale worst (per unit)
+
+  condition ItemCondition @default(GOOD)
+  category  ItemCategory  @default(OTHER)
+
   notes     String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userId])
+  @@index([userId, category])
+  @@index([userId, condition])
+
   @@unique([userId, sku])
 }
