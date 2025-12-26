@@ -1,4 +1,4 @@
-// app/program/sales/page.js
+// FILE: app/program/sales/page.js
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
@@ -26,13 +26,13 @@ const PLATFORMS = [
 ]
 
 const fmt = (currency, minorUnits) => {
-    const c = CURRENCY_META[currency] || CURRENCY_META.GBP
+    const c = CURRENCY_META[(currency || "GBP").toUpperCase()] || CURRENCY_META.GBP
     const n = Number.isFinite(minorUnits) ? minorUnits : 0
     const sign = n < 0 ? "-" : ""
     return `${sign}${c.symbol}${(Math.abs(n) / 100).toFixed(2)}`
 }
 
-// rates map is "units per USD"
+// rates map is "units per USD" (i.e. 1 USD -> rates[CUR] CUR)
 const convertMinor = (minor, fromCur, toCur, rates) => {
     const m = Number.isFinite(minor) ? minor : 0
     const f = (fromCur || "GBP").toUpperCase()
@@ -105,13 +105,7 @@ function normaliseMeta(meta) {
     const legacyWorst = m.expectedWorstPence == null ? null : Number(m.expectedWorstPence)
 
     const estimatedFromLegacy =
-        estimatedSalePence != null
-            ? estimatedSalePence
-            : legacyBest != null
-                ? legacyBest
-                : legacyWorst != null
-                    ? legacyWorst
-                    : null
+        estimatedSalePence != null ? estimatedSalePence : legacyBest != null ? legacyBest : legacyWorst != null ? legacyWorst : null
 
     const listings = Array.isArray(m.listings)
         ? m.listings
@@ -142,7 +136,7 @@ function computeItem(it) {
     const q = Number(it.quantity) || 0
     const status = meta.status
 
-    const purchaseTotalPerUnit = meta.purchaseTotalPence > 0 ? meta.purchaseTotalPence : Number(it.costPence) || 0
+    const purchaseTotalPerUnit = meta.purchaseTotalPence > 0 ? meta.purchaseTotalPence : 0
     const purchaseTotal = purchaseTotalPerUnit * q
 
     const firstListing = meta.listings?.[0] || null
@@ -210,20 +204,20 @@ function StatCard({ label, value, sub }) {
     )
 }
 
-function Row({ label, value }) {
-    return (
-        <div className="flex items-center justify-between gap-4 py-2">
-            <div className="text-xs font-semibold text-zinc-300">{label}</div>
-            <div className="text-sm text-white">{value}</div>
-        </div>
-    )
-}
-
 function Snapshot({ label, value, good = false }) {
     return (
         <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
             <div className="text-[11px] font-semibold text-zinc-300">{label}</div>
             <div className={["mt-1 text-sm font-semibold", good ? "text-emerald-200" : "text-white"].join(" ")}>{value}</div>
+        </div>
+    )
+}
+
+function Row({ label, value }) {
+    return (
+        <div className="flex items-center justify-between gap-4 py-2">
+            <div className="text-xs font-semibold text-zinc-300">{label}</div>
+            <div className="text-sm text-white">{value}</div>
         </div>
     )
 }
@@ -261,19 +255,54 @@ function TrashIcon({ className = "" }) {
     )
 }
 
-/**
- * SALES DATA MODEL (frontend assumptions)
- * - GET /api/sales -> array of:
- *   { id, itemId, itemName, sku, platform, soldAt, quantitySold, salePricePerUnitPence, feesPence, netPence, currency, notes, createdAt }
- *
- * - POST /api/sales payload:
- *   { itemId, platform, soldAt, quantitySold, salePricePerUnitPence, feesPence, currency, notes }
- *
- * INVENTORY UPDATE LOGIC:
- * - PATCH /api/items/:id with:
- *   { quantity, notes, costPence }
- * and notes.meta.status set to SOLD if remaining 0, else LISTED (or UNLISTED)
- */
+function CheckIcon({ className = "" }) {
+    return (
+        <svg viewBox="0 0 24 24" className={["h-4 w-4", className].join(" ")} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20 6 9 17l-5-5" />
+        </svg>
+    )
+}
+
+const startOfDayLocal = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
+const startOfWeekLocal = (d) => {
+    const day = d.getDay()
+    const diff = (day + 6) % 7 // Monday=0
+    const s = new Date(d)
+    s.setDate(d.getDate() - diff)
+    return startOfDayLocal(s)
+}
+const isSameBucket = (a, b, bucket) => {
+    const da = new Date(a)
+    const db = new Date(b)
+    if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return false
+
+    if (bucket === "day") return startOfDayLocal(da).getTime() === startOfDayLocal(db).getTime()
+    if (bucket === "week") return startOfWeekLocal(da).getTime() === startOfWeekLocal(db).getTime()
+    if (bucket === "month") return da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth()
+    return da.getFullYear() === db.getFullYear()
+}
+
+const toDateInput = (d) => {
+    if (!d || Number.isNaN(d.getTime())) return ""
+    const yyyy = d.getFullYear()
+    const mm = String(d.getMonth() + 1).padStart(2, "0")
+    const dd = String(d.getDate()).padStart(2, "0")
+    return `${yyyy}-${mm}-${dd}`
+}
+
+const parseDateInputToLocalRange = (fromYmd, toYmd) => {
+    const from = String(fromYmd || "").trim()
+    const to = String(toYmd || "").trim()
+    if (!from && !to) return { from: null, to: null }
+
+    const fromDate = from ? new Date(`${from}T00:00:00`) : null
+    const toDate = to ? new Date(`${to}T23:59:59`) : null
+
+    return {
+        from: fromDate && !Number.isNaN(fromDate.getTime()) ? fromDate : null,
+        to: toDate && !Number.isNaN(toDate.getTime()) ? toDate : null,
+    }
+}
 
 export default function SalesPage() {
     const [items, setItems] = useState([])
@@ -298,6 +327,7 @@ export default function SalesPage() {
     })
 
     const [search, setSearch] = useState("")
+    const [period, setPeriod] = useState("week") // day|week|month|year
 
     const [addOpen, setAddOpen] = useState(false)
     const [addSaving, setAddSaving] = useState(false)
@@ -305,17 +335,25 @@ export default function SalesPage() {
     const [sellForm, setSellForm] = useState(() => ({
         itemId: "",
         platform: "EBAY",
-        soldAt: new Date().toISOString().slice(0, 16), // yyyy-mm-ddThh:mm (local input)
+        soldAt: new Date().toISOString().slice(0, 16),
         quantitySold: 1,
         salePricePerUnit: "0.00",
-        fees: "0.00",
         notes: "",
-        removeFromInventory: true, // if true: decrement quantity and possibly mark SOLD
-        removeMode: "DECREMENT", // DECREMENT or DELETE
+        removeFromInventory: true,
+        removeMode: "DECREMENT",
     }))
 
     const [selectedSale, setSelectedSale] = useState(null)
     const [detailOpen, setDetailOpen] = useState(false)
+
+    // Bulk delete
+    const [selectedIds, setSelectedIds] = useState(() => new Set())
+    const [bulkOpen, setBulkOpen] = useState(false)
+    const [bulkWorking, setBulkWorking] = useState(false)
+    const [bulkRange, setBulkRange] = useState(() => {
+        const now = new Date()
+        return { from: toDateInput(now), to: toDateInput(now) }
+    })
 
     const showToast = (type, msg) => {
         setToast({ type, msg })
@@ -406,14 +444,11 @@ export default function SalesPage() {
 
     const sellQty = Math.max(0, safeInt(sellForm.quantitySold, 0))
     const sellPricePerUnitPence = parseMoneyToPence(sellForm.salePricePerUnit)
-    const sellFeesPence = parseMoneyToPence(sellForm.fees)
-
     const sellGrossPence = sellQty * sellPricePerUnitPence
-    const sellNetPence = Math.max(0, sellGrossPence - sellFeesPence)
 
-    const purchasePerUnitPence = selectedItemComputed ? selectedItemComputed.purchaseTotalPerUnit : 0
-    const purchaseTotalForSoldUnitsPence = sellQty * (Number(purchasePerUnitPence) || 0)
-    const profitPence = sellNetPence - purchaseTotalForSoldUnitsPence
+    const purchasePerUnitPence = selectedItemComputed ? Number(selectedItemComputed.purchaseTotalPerUnit) || 0 : 0
+    const purchaseTotalForSoldUnitsPence = sellQty * purchasePerUnitPence
+    const profitPence = sellGrossPence - purchaseTotalForSoldUnitsPence
 
     const openAdd = () => {
         const first = inventoryOptions[0]?.it?.id ? String(inventoryOptions[0].it.id) : ""
@@ -423,7 +458,6 @@ export default function SalesPage() {
             soldAt: new Date().toISOString().slice(0, 16),
             quantitySold: 1,
             salePricePerUnit: "0.00",
-            fees: "0.00",
             notes: "",
             removeFromInventory: true,
             removeMode: "DECREMENT",
@@ -436,12 +470,30 @@ export default function SalesPage() {
         setDetailOpen(true)
     }
 
+    const tryDeleteSaleRequest = async (saleId) => {
+        // Primary: REST style /api/sales/:id
+        const r1 = await fetch(`/api/sales/${saleId}`, { method: "DELETE" })
+        if (r1.ok) return { ok: true }
+        const d1 = await r1.json().catch(() => null)
+
+        // Fallback: query param /api/sales?id=
+        const r2 = await fetch(`/api/sales?id=${encodeURIComponent(String(saleId))}`, { method: "DELETE" })
+        if (r2.ok) return { ok: true }
+        const d2 = await r2.json().catch(() => null)
+
+        return { ok: false, error: d2?.error || d1?.error || `Delete failed (${r1.status})` }
+    }
+
     const deleteSale = async (saleId) => {
         try {
-            const res = await fetch(`/api/sales/${saleId}`, { method: "DELETE" })
-            const data = await res.json().catch(() => null)
-            if (!res.ok) throw new Error(data?.error || `Delete failed (${res.status})`)
+            const out = await tryDeleteSaleRequest(saleId)
+            if (!out.ok) throw new Error(out.error || "Delete failed")
             showToast("ok", "Sale deleted")
+            setSelectedIds((prev) => {
+                const next = new Set(prev)
+                next.delete(String(saleId))
+                return next
+            })
             setDetailOpen(false)
             setSelectedSale(null)
             await loadSales()
@@ -459,38 +511,36 @@ export default function SalesPage() {
 
         const c = computeItem(it)
         const available = Number(it.quantity) || 0
+
+        if (available <= 0) return showToast("error", "This item has 0 quantity in inventory")
         if (sellQty <= 0) return showToast("error", "Quantity sold must be at least 1")
         if (sellQty > available) return showToast("error", "Quantity sold exceeds inventory quantity")
-
         if (sellPricePerUnitPence <= 0) return showToast("error", "Sale price per unit is required")
 
         const platform = (sellForm.platform || "OTHER").toUpperCase()
 
-        // soldAt from datetime-local input -> store ISO (best effort)
         const soldAtLocal = String(sellForm.soldAt || "").trim()
         const soldAt = soldAtLocal ? new Date(soldAtLocal).toISOString() : new Date().toISOString()
+
+        const saleCur = (c.itemCur || "GBP").toUpperCase()
 
         const salePayload = {
             itemId: String(it.id),
             itemName: it.name || null,
             sku: it.sku || null,
-
             platform,
             soldAt,
-
             quantitySold: sellQty,
             salePricePerUnitPence: sellPricePerUnitPence,
-            feesPence: sellFeesPence,
-
-            netPence: sellNetPence,
-            currency: c.itemCur || "GBP",
-
+            feesPence: 0,
+            netPence: sellGrossPence,
+            costTotalPence: purchaseTotalForSoldUnitsPence,
+            currency: saleCur,
             notes: String(sellForm.notes || "").trim() || null,
         }
 
         setAddSaving(true)
         try {
-            // 1) Create sale record
             const resSale = await fetch("/api/sales", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -499,7 +549,6 @@ export default function SalesPage() {
             const saleData = await resSale.json().catch(() => null)
             if (!resSale.ok) throw new Error(saleData?.error || `Create sale failed (${resSale.status})`)
 
-            // 2) Update inventory (remove from inventory)
             if (sellForm.removeFromInventory) {
                 if (sellForm.removeMode === "DELETE") {
                     const resDel = await fetch(`/api/items/${it.id}`, { method: "DELETE" })
@@ -507,17 +556,13 @@ export default function SalesPage() {
                     if (!resDel.ok) throw new Error(delData?.error || `Inventory delete failed (${resDel.status})`)
                 } else {
                     const remaining = Math.max(0, available - sellQty)
+
                     const decoded = decodeNotes(it.notes)
                     const meta = normaliseMeta(decoded.meta)
 
                     const nextStatus = remaining === 0 ? "SOLD" : "LISTED"
-                    const nextMeta = {
-                        ...meta,
-                        status: nextStatus,
-                    }
+                    const nextMeta = { ...meta, status: nextStatus }
 
-                    // If fully sold, store the realised sale (per unit) as the first listing price for consistency
-                    // and keep any URLs unchanged
                     if (remaining === 0) {
                         const listings = Array.isArray(nextMeta.listings) ? [...nextMeta.listings] : []
                         const first = listings[0] || { platform, url: "", pricePence: null }
@@ -530,11 +575,9 @@ export default function SalesPage() {
                     }
 
                     const patched = {
-                        name: it.name,
-                        sku: it.sku || null,
                         quantity: remaining,
-                        costPence: Number(nextMeta.purchaseTotalPence || it.costPence || 0) || 0,
-                        notes: encodeNotes(decoded.notes, { ...nextMeta, currency: meta.currency || c.itemCur || "GBP" }),
+                        status: nextStatus,
+                        notes: encodeNotes(decoded.notes, { ...nextMeta, currency: meta.currency || saleCur }),
                     }
 
                     const resPatch = await fetch(`/api/items/${it.id}`, {
@@ -572,35 +615,141 @@ export default function SalesPage() {
         })
     }, [sales, search])
 
-    const totals = useMemo(() => {
-        let gross = 0
-        let net = 0
-        let fees = 0
+    // keep selection stable: drop ids that no longer exist in filtered list after reload/search
+    useEffect(() => {
+        setSelectedIds((prev) => {
+            const allowed = new Set(filteredSales.map((s) => String(s.id)))
+            const next = new Set()
+            for (const id of prev) if (allowed.has(String(id))) next.add(String(id))
+            return next
+        })
+    }, [filteredSales])
+
+    const periodLabel = useMemo(() => {
+        const now = new Date()
+        if (period === "day") return now.toLocaleDateString()
+        if (period === "week") {
+            const s = startOfWeekLocal(now)
+            const e = new Date(s)
+            e.setDate(s.getDate() + 6)
+            return `${s.toLocaleDateString()} – ${e.toLocaleDateString()}`
+        }
+        if (period === "month") return `${now.toLocaleString(undefined, { month: "long" })} ${now.getFullYear()}`
+        return String(now.getFullYear())
+    }, [period])
+
+    const periodTotals = useMemo(() => {
+        const now = new Date()
+
+        let revenue = 0
         let profit = 0
-        let count = 0
+        let units = 0
+        let rows = 0
 
         for (const s of filteredSales) {
+            const soldAt = s.soldAt ? new Date(s.soldAt) : null
+            if (!soldAt || Number.isNaN(soldAt.getTime())) continue
+            if (!isSameBucket(soldAt, now, period)) continue
+
             const cur = (s.currency || "GBP").toUpperCase()
             const qty = Number(s.quantitySold || 0) || 0
             const ppu = Number(s.salePricePerUnitPence || 0) || 0
-            const grossPence = qty * ppu
+            const revenuePence = qty * ppu
 
-            const feesPence = Number(s.feesPence || 0) || 0
-            const netPence = s.netPence != null ? Number(s.netPence) || 0 : Math.max(0, grossPence - feesPence)
-
-            // best-effort profit if cost exists on sale record
             const costPence = Number(s.costTotalPence || 0) || 0
-            const profitPence = Number.isFinite(costPence) && costPence > 0 ? netPence - costPence : 0
+            const profitPence = revenuePence - costPence
 
-            gross += convertMinor(grossPence, cur, currencyView, fx.rates).value
-            net += convertMinor(netPence, cur, currencyView, fx.rates).value
-            fees += convertMinor(feesPence, cur, currencyView, fx.rates).value
+            revenue += convertMinor(revenuePence, cur, currencyView, fx.rates).value
             profit += convertMinor(profitPence, cur, currencyView, fx.rates).value
-            count += 1
+
+            units += qty
+            rows += 1
         }
 
-        return { count, gross, net, fees, profit }
-    }, [filteredSales, currencyView, fx.rates])
+        const avgSale = rows > 0 ? Math.round(revenue / rows) : 0
+        const margin = revenue > 0 ? (profit / revenue) * 100 : 0
+
+        return { revenue, profit, units, rows, avgSale, margin }
+    }, [filteredSales, period, currencyView, fx.rates])
+
+    const allVisibleIds = useMemo(() => filteredSales.map((s) => String(s.id)).filter(Boolean), [filteredSales])
+    const allVisibleSelected = useMemo(() => allVisibleIds.length > 0 && allVisibleIds.every((id) => selectedIds.has(id)), [allVisibleIds, selectedIds])
+    const selectedCount = selectedIds.size
+
+    const toggleSelectAllVisible = () => {
+        setSelectedIds((prev) => {
+            const next = new Set(prev)
+            if (allVisibleSelected) {
+                for (const id of allVisibleIds) next.delete(id)
+            } else {
+                for (const id of allVisibleIds) next.add(id)
+            }
+            return next
+        })
+    }
+
+    const toggleOne = (id) => {
+        const sid = String(id)
+        setSelectedIds((prev) => {
+            const next = new Set(prev)
+            if (next.has(sid)) next.delete(sid)
+            else next.add(sid)
+            return next
+        })
+    }
+
+    const rangeMatchesSale = (sale, rangeFrom, rangeTo) => {
+        const dt = sale?.soldAt ? new Date(sale.soldAt) : null
+        if (!dt || Number.isNaN(dt.getTime())) return false
+        if (rangeFrom && dt.getTime() < rangeFrom.getTime()) return false
+        if (rangeTo && dt.getTime() > rangeTo.getTime()) return false
+        return true
+    }
+
+    const selectedIdsArray = useMemo(() => Array.from(selectedIds), [selectedIds])
+
+    const bulkDeleteByIds = async (ids) => {
+        const list = Array.from(new Set((ids || []).map((x) => String(x)).filter(Boolean)))
+        if (list.length === 0) return showToast("error", "No sales selected")
+
+        setBulkWorking(true)
+        try {
+            let ok = 0
+            let fail = 0
+
+            // serial to avoid hammering and to keep UX predictable
+            for (const id of list) {
+                const out = await tryDeleteSaleRequest(id)
+                if (out.ok) ok += 1
+                else fail += 1
+            }
+
+            if (fail === 0) showToast("ok", `Deleted ${ok} sale(s)`)
+            else showToast("error", `Deleted ${ok} sale(s), failed ${fail}`)
+
+            setSelectedIds((prev) => {
+                const next = new Set(prev)
+                for (const id of list) next.delete(String(id))
+                return next
+            })
+
+            await loadSales()
+        } catch (e) {
+            showToast("error", e?.message || "Bulk delete failed")
+        } finally {
+            setBulkWorking(false)
+        }
+    }
+
+    const bulkDeleteWithinRange = async () => {
+        const { from, to } = parseDateInputToLocalRange(bulkRange.from, bulkRange.to)
+        if (!from && !to) return showToast("error", "Select a date range")
+
+        const ids = filteredSales.filter((s) => rangeMatchesSale(s, from, to)).map((s) => String(s.id)).filter(Boolean)
+        if (ids.length === 0) return showToast("error", "No sales found in that date range")
+
+        await bulkDeleteByIds(ids)
+    }
 
     const ROW_H = "h-[58px]"
     const HEAD_H = "h-[42px]"
@@ -614,17 +763,13 @@ export default function SalesPage() {
                 <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
                     <div>
                         <h1 className="text-3xl font-semibold tracking-tight">Sales</h1>
-                        <p className="mt-1 text-sm text-zinc-300">Record a sale, and it will remove units from inventory (decrement or delete).</p>
+                        <p className="mt-1 text-sm text-zinc-300">Record a sale, and it will remove units from inventory (decrement or delete) and set status to SOLD when quantity hits 0.</p>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
                         <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
                             <div className="text-xs font-semibold text-zinc-300">Display</div>
-                            <select
-                                value={currencyView}
-                                onChange={(e) => setCurrencyView(e.target.value)}
-                                className="h-9 rounded-xl border border-white/10 bg-zinc-950/60 px-2 text-sm text-white outline-none"
-                            >
+                            <select value={currencyView} onChange={(e) => setCurrencyView(e.target.value)} className="h-9 rounded-xl border border-white/10 bg-zinc-950/60 px-2 text-sm text-white outline-none">
                                 {Object.keys(CURRENCY_META).map((c) => (
                                     <option key={c} value={c}>
                                         {c}
@@ -636,7 +781,7 @@ export default function SalesPage() {
                                 type="button"
                                 onClick={loadFx}
                                 className="h-9 rounded-xl border border-white/10 bg-white/10 px-3 text-xs font-semibold text-white/90 hover:bg-white/15"
-                                title="Refresh exchange rates"
+                                title={fx.error ? `FX error: ${fx.error}` : "Refresh exchange rates"}
                             >
                                 {fx.loading ? "FX…" : "FX"}
                             </button>
@@ -650,11 +795,7 @@ export default function SalesPage() {
                                 placeholder="Search item, SKU, platform, notes…"
                             />
                             {search ? (
-                                <button
-                                    type="button"
-                                    onClick={() => setSearch("")}
-                                    className="h-9 rounded-xl border border-white/10 bg-white/10 px-3 text-xs font-semibold text-white/90 hover:bg-white/15"
-                                >
+                                <button type="button" onClick={() => setSearch("")} className="h-9 rounded-xl border border-white/10 bg-white/10 px-3 text-xs font-semibold text-white/90 hover:bg-white/15">
                                     Clear
                                 </button>
                             ) : null}
@@ -673,6 +814,14 @@ export default function SalesPage() {
 
                         <button
                             type="button"
+                            onClick={() => setBulkOpen(true)}
+                            className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15"
+                        >
+                            Bulk delete
+                        </button>
+
+                        <button
+                            type="button"
                             onClick={openAdd}
                             disabled={loadingItems || inventoryOptions.length === 0}
                             className="h-10 rounded-2xl bg-white px-4 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60"
@@ -684,22 +833,55 @@ export default function SalesPage() {
 
                 {toast.msg ? (
                     <div className="mb-5">
-                        <div
-                            className={[
-                                "rounded-2xl border px-4 py-3 text-sm",
-                                toast.type === "error" ? "border-red-400/20 bg-red-500/10 text-red-100" : "border-emerald-400/20 bg-emerald-500/10 text-emerald-100",
-                            ].join(" ")}
-                        >
+                        <div className={["rounded-2xl border px-4 py-3 text-sm", toast.type === "error" ? "border-red-400/20 bg-red-500/10 text-red-100" : "border-emerald-400/20 bg-emerald-500/10 text-emerald-100"].join(" ")}>
                             {toast.msg}
                         </div>
                     </div>
                 ) : null}
 
+                <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-white/10 bg-white/5 p-4 shadow-lg backdrop-blur">
+                    <div className="flex items-center gap-2">
+                        <div className="text-xs font-semibold text-zinc-300">Period</div>
+                        <div className="inline-flex rounded-2xl border border-white/10 bg-zinc-950/30 p-1">
+                            {["day", "week", "month", "year"].map((p) => (
+                                <button
+                                    key={p}
+                                    type="button"
+                                    onClick={() => setPeriod(p)}
+                                    className={["h-10 rounded-2xl px-4 text-sm font-semibold transition", period === p ? "bg-white text-zinc-950" : "text-white/90 hover:bg-white/10"].join(" ")}
+                                >
+                                    {p[0].toUpperCase() + p.slice(1)}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-300">
+                        <div>
+                            Showing: <span className="font-semibold text-white">{periodLabel}</span>
+                        </div>
+                        <div className="rounded-2xl border border-white/10 bg-zinc-950/30 px-3 py-2">
+                            Selected: <span className="font-semibold text-white">{selectedCount}</span>
+                        </div>
+                        {selectedCount > 0 ? (
+                            <button
+                                type="button"
+                                onClick={() => bulkDeleteByIds(selectedIdsArray)}
+                                disabled={bulkWorking}
+                                className="inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 text-sm font-semibold text-red-100 hover:bg-red-500/15 disabled:opacity-60"
+                            >
+                                <TrashIcon />
+                                {bulkWorking ? "Deleting…" : "Delete selected"}
+                            </button>
+                        ) : null}
+                    </div>
+                </div>
+
                 <div className="mb-6 grid gap-4 md:grid-cols-4">
-                    <StatCard label="Sales (rows)" value={totals.count} sub="Visible sales records" />
-                    <StatCard label={`Gross (${currencyView})`} value={fmt(currencyView, totals.gross)} sub="Qty × sale price (sum)" />
-                    <StatCard label={`Fees (${currencyView})`} value={fmt(currencyView, totals.fees)} sub="Fees (sum)" />
-                    <StatCard label={`Net (${currencyView})`} value={fmt(currencyView, totals.net)} sub="Gross - fees (sum)" />
+                    <StatCard label={`Revenue (${currencyView})`} value={fmt(currencyView, periodTotals.revenue)} sub={`${periodTotals.rows} sale(s) this period`} />
+                    <StatCard label={`Profit (${currencyView})`} value={fmt(currencyView, periodTotals.profit)} sub="Revenue − cost" />
+                    <StatCard label="Units sold" value={String(periodTotals.units)} sub="Total quantity sold" />
+                    <StatCard label="Average sale" value={fmt(currencyView, periodTotals.avgSale)} sub={`${periodTotals.margin.toFixed(1)}% margin`} />
                 </div>
 
                 <div className="rounded-3xl border border-white/10 bg-white/5 p-5 shadow-lg backdrop-blur">
@@ -708,46 +890,93 @@ export default function SalesPage() {
                             <div className="text-sm font-semibold text-white">Sales history</div>
                             <div className="text-xs text-zinc-300">{loadingSales ? "Loading…" : `${filteredSales.length} sale(s)`} • click a row for details</div>
                         </div>
+
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={toggleSelectAllVisible}
+                                className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15"
+                            >
+                                {allVisibleSelected ? "Unselect visible" : "Select visible"}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setSelectedIds(new Set())}
+                                disabled={selectedIds.size === 0}
+                                className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15 disabled:opacity-60"
+                            >
+                                Clear selection
+                            </button>
+                        </div>
                     </div>
 
                     <div className="rounded-2xl border border-white/10 overflow-hidden">
-                        <div className={["grid border-b border-white/10", HEAD_H, HEADER_BG].join(" ")} style={{ gridTemplateColumns: "minmax(0,2fr) 120px 110px 150px 150px 110px 60px" }}>
+                        <div className={["grid border-b border-white/10", HEAD_H, HEADER_BG].join(" ")} style={{ gridTemplateColumns: "54px minmax(0,2fr) 120px 110px 150px 150px 150px 110px 60px" }}>
+                            <div className={["flex items-center justify-center text-xs font-semibold text-zinc-200"].join(" ")}>
+                                <button
+                                    type="button"
+                                    onClick={toggleSelectAllVisible}
+                                    className={["inline-flex h-7 w-7 items-center justify-center rounded-xl border transition", allVisibleSelected ? "border-white/10 bg-white text-zinc-950" : "border-white/10 bg-white/10 text-white/90 hover:bg-white/15"].join(" ")}
+                                    title={allVisibleSelected ? "Unselect visible" : "Select visible"}
+                                >
+                                    {allVisibleSelected ? <CheckIcon /> : null}
+                                </button>
+                            </div>
                             <div className={["flex min-w-0 items-center text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}>Item</div>
                             <div className={["flex min-w-0 items-center text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}>Platform</div>
                             <div className={["flex min-w-0 items-center text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}>Qty</div>
                             <div className={["flex min-w-0 items-center text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}>Sale / unit</div>
-                            <div className={["flex min-w-0 items-center text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}>Net</div>
+                            <div className={["flex min-w-0 items-center text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}>Revenue</div>
+                            <div className={["flex min-w-0 items-center text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}>Profit</div>
                             <div className={["flex min-w-0 items-center text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}>Sold at</div>
                             <div className={["flex min-w-0 items-center justify-end text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}> </div>
                         </div>
 
                         <div className="divide-y divide-white/10">
-                            {!loadingSales && filteredSales.length === 0 ? (
-                                <div className={["text-sm text-zinc-300", CELL_PAD, "py-6"].join(" ")}>No sales yet.</div>
-                            ) : null}
+                            {!loadingSales && filteredSales.length === 0 ? <div className={["text-sm text-zinc-300", CELL_PAD, "py-6"].join(" ")}>No sales yet.</div> : null}
 
                             {filteredSales.map((s, idx) => {
                                 const rowBg = idx % 2 === 0 ? "bg-zinc-950" : "bg-zinc-900"
+
                                 const cur = (s.currency || "GBP").toUpperCase()
                                 const qty = Number(s.quantitySold || 0) || 0
                                 const ppu = Number(s.salePricePerUnitPence || 0) || 0
-                                const grossPence = qty * ppu
-                                const feesPence = Number(s.feesPence || 0) || 0
-                                const netPence = s.netPence != null ? Number(s.netPence) || 0 : Math.max(0, grossPence - feesPence)
+                                const revenuePence = qty * ppu
+
+                                const costPence = Number(s.costTotalPence || 0) || 0
+                                const profitPence = revenuePence - costPence
 
                                 const ppuView = fmt(currencyView, convertMinor(ppu, cur, currencyView, fx.rates).value)
-                                const netView = fmt(currencyView, convertMinor(netPence, cur, currencyView, fx.rates).value)
+                                const revenueView = fmt(currencyView, convertMinor(revenuePence, cur, currencyView, fx.rates).value)
+                                const profitView = fmt(currencyView, convertMinor(profitPence, cur, currencyView, fx.rates).value)
 
                                 const dt = s.soldAt ? new Date(s.soldAt) : null
                                 const soldAtLabel = dt && !Number.isNaN(dt.getTime()) ? dt.toLocaleDateString() : "—"
+
+                                const sid = String(s.id)
+                                const checked = selectedIds.has(sid)
 
                                 return (
                                     <div
                                         key={s.id || `${s.itemId}-${idx}`}
                                         className={["grid cursor-pointer", ROW_H, rowBg, "hover:bg-white/5"].join(" ")}
-                                        style={{ gridTemplateColumns: "minmax(0,2fr) 120px 110px 150px 150px 110px 60px" }}
+                                        style={{ gridTemplateColumns: "54px minmax(0,2fr) 120px 110px 150px 150px 150px 110px 60px" }}
                                         onClick={() => openSaleDetail(s)}
                                     >
+                                        <div className={["flex items-center justify-center", CELL_Y].join(" ")} onClick={(e) => e.stopPropagation()}>
+                                            <button
+                                                type="button"
+                                                onClick={() => toggleOne(sid)}
+                                                className={[
+                                                    "inline-flex h-7 w-7 items-center justify-center rounded-xl border transition",
+                                                    checked ? "border-white/10 bg-white text-zinc-950" : "border-white/10 bg-white/10 text-white/90 hover:bg-white/15",
+                                                ].join(" ")}
+                                                title={checked ? "Unselect" : "Select"}
+                                            >
+                                                {checked ? <CheckIcon /> : null}
+                                            </button>
+                                        </div>
+
                                         <div className={["flex min-w-0 items-center overflow-hidden", CELL_PAD, CELL_Y].join(" ")}>
                                             <div className="min-w-0">
                                                 <div className="truncate text-[13px] font-semibold text-white">{s.itemName || s.item?.name || "—"}</div>
@@ -768,7 +997,11 @@ export default function SalesPage() {
                                         </div>
 
                                         <div className={["flex min-w-0 items-center overflow-hidden", CELL_PAD, CELL_Y].join(" ")}>
-                                            <span className="truncate text-[13px] font-semibold text-emerald-200">{netView}</span>
+                                            <span className="truncate text-[13px] text-white">{revenueView}</span>
+                                        </div>
+
+                                        <div className={["flex min-w-0 items-center overflow-hidden", CELL_PAD, CELL_Y].join(" ")}>
+                                            <span className={["truncate text-[13px] font-semibold", profitPence >= 0 ? "text-emerald-200" : "text-red-200"].join(" ")}>{profitView}</span>
                                         </div>
 
                                         <div className={["flex min-w-0 items-center overflow-hidden", CELL_PAD, CELL_Y].join(" ")}>
@@ -778,7 +1011,11 @@ export default function SalesPage() {
                                         <div className={["flex items-center justify-end gap-2", CELL_PAD, CELL_Y].join(" ")} onClick={(e) => e.stopPropagation()}>
                                             <IconButton
                                                 title="Delete sale"
-                                                onClick={() => deleteSale(s.id)}
+                                                onClick={(e) => {
+                                                    e?.preventDefault?.()
+                                                    e?.stopPropagation?.()
+                                                    deleteSale(s.id)
+                                                }}
                                                 className="border-red-400/20 bg-red-500/10 text-red-100 hover:bg-red-500/15"
                                             >
                                                 <TrashIcon />
@@ -796,12 +1033,120 @@ export default function SalesPage() {
                             <span>Attribution:</span>
                             <span
                                 className="text-zinc-300 underline underline-offset-2"
-                                dangerouslySetInnerHTML={{ __html: fx.attributionHtml || '<a href="https://www.exchangerate-api.com">Rates By Exchange Rate API</a>' }}
+                                dangerouslySetInnerHTML={{
+                                    __html: fx.attributionHtml || '<a href="https://www.exchangerate-api.com">Rates By Exchange Rate API</a>',
+                                }}
                             />
                         </div>
                     </div>
                 </div>
             </div>
+
+            {/* BULK DELETE MODAL */}
+            {bulkOpen ? (
+                <Modal
+                    title="Bulk delete sales"
+                    onClose={() => setBulkOpen(false)}
+                    maxWidth="max-w-4xl"
+                    footer={
+                        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+                            <button
+                                type="button"
+                                onClick={() => setBulkOpen(false)}
+                                className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
+                            >
+                                Close
+                            </button>
+
+                            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                                <button
+                                    type="button"
+                                    onClick={() => bulkDeleteByIds(selectedIdsArray)}
+                                    disabled={bulkWorking || selectedIdsArray.length === 0}
+                                    className="h-11 rounded-2xl border border-red-400/20 bg-red-500/10 px-5 text-sm font-semibold text-red-100 hover:bg-red-500/15 disabled:opacity-60"
+                                >
+                                    {bulkWorking ? "Deleting…" : `Delete selected (${selectedIdsArray.length})`}
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={bulkDeleteWithinRange}
+                                    disabled={bulkWorking}
+                                    className="h-11 rounded-2xl border border-red-400/20 bg-red-500/10 px-5 text-sm font-semibold text-red-100 hover:bg-red-500/15 disabled:opacity-60"
+                                >
+                                    {bulkWorking ? "Deleting…" : "Delete within date range"}
+                                </button>
+                            </div>
+                        </div>
+                    }
+                >
+                    <div className="space-y-4">
+                        <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                            <div className="text-sm font-semibold text-white">Selected rows</div>
+                            <div className="mt-1 text-xs text-zinc-300">Uses the tick boxes in the table (current filtered view).</div>
+
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={toggleSelectAllVisible}
+                                    className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15"
+                                >
+                                    {allVisibleSelected ? "Unselect visible" : "Select visible"}
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => setSelectedIds(new Set())}
+                                    disabled={selectedIds.size === 0}
+                                    className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15 disabled:opacity-60"
+                                >
+                                    Clear selection
+                                </button>
+
+                                <div className="ml-auto rounded-2xl border border-white/10 bg-zinc-950/30 px-3 py-2 text-xs text-zinc-300">
+                                    Selected: <span className="font-semibold text-white">{selectedIdsArray.length}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                            <div className="text-sm font-semibold text-white">Delete within date range</div>
+                            <div className="mt-1 text-xs text-zinc-300">Deletes all sales whose Sold at falls between these dates (inclusive), using the current filtered list.</div>
+
+                            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                <Field label="From">
+                                    <input
+                                        type="date"
+                                        value={bulkRange.from}
+                                        onChange={(e) => setBulkRange((p) => ({ ...p, from: e.target.value }))}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    />
+                                </Field>
+                                <Field label="To">
+                                    <input
+                                        type="date"
+                                        value={bulkRange.to}
+                                        onChange={(e) => setBulkRange((p) => ({ ...p, to: e.target.value }))}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    />
+                                </Field>
+                            </div>
+
+                            <div className="mt-3 rounded-2xl border border-white/10 bg-zinc-950/30 p-3 text-xs text-zinc-300">
+                                Matches:{" "}
+                                <span className="font-semibold text-white">
+                                    {(() => {
+                                        const { from, to } = parseDateInputToLocalRange(bulkRange.from, bulkRange.to)
+                                        if (!from && !to) return 0
+                                        return filteredSales.filter((s) => rangeMatchesSale(s, from, to)).length
+                                    })()}
+                                </span>{" "}
+                                sale(s)
+                            </div>
+                        </div>
+                    </div>
+                </Modal>
+            ) : null}
 
             {/* RECORD SALE MODAL */}
             {addOpen ? (
@@ -880,26 +1225,11 @@ export default function SalesPage() {
                                 />
                             </Field>
 
-                            <Field label={`Fees (total) (${selectedItemComputed?.itemCur || "GBP"})`} className="md:col-span-2">
-                                <input
-                                    inputMode="decimal"
-                                    value={sellForm.fees}
-                                    onChange={(e) => setSellForm((p) => ({ ...p, fees: e.target.value }))}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                    placeholder="0.00"
-                                />
-                            </Field>
-
                             <div className="rounded-2xl border border-white/10 bg-zinc-950/30 p-4 md:col-span-2">
-                                <div className="grid gap-2 sm:grid-cols-4">
-                                    <Snapshot label="Gross" value={fmt(selectedItemComputed?.itemCur || "GBP", sellGrossPence)} good />
-                                    <Snapshot label="Fees" value={fmt(selectedItemComputed?.itemCur || "GBP", sellFeesPence)} />
-                                    <Snapshot label="Net" value={fmt(selectedItemComputed?.itemCur || "GBP", sellNetPence)} good />
-                                    <Snapshot
-                                        label="Profit"
-                                        value={fmt(selectedItemComputed?.itemCur || "GBP", profitPence)}
-                                        good={profitPence >= 0}
-                                    />
+                                <div className="grid gap-2 sm:grid-cols-3">
+                                    <Snapshot label="Revenue" value={fmt(selectedItemComputed?.itemCur || "GBP", sellGrossPence)} good />
+                                    <Snapshot label="Cost basis" value={fmt(selectedItemComputed?.itemCur || "GBP", purchaseTotalForSoldUnitsPence)} />
+                                    <Snapshot label="Profit" value={fmt(selectedItemComputed?.itemCur || "GBP", profitPence)} good={profitPence >= 0} />
                                 </div>
 
                                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -913,9 +1243,7 @@ export default function SalesPage() {
                                     <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
                                         <div className="text-[11px] font-semibold text-zinc-300">Inventory impact</div>
                                         <div className="mt-1 text-sm font-semibold text-white">
-                                            {selectedItem
-                                                ? `Qty ${Number(selectedItem.quantity) || 0} → ${Math.max(0, (Number(selectedItem.quantity) || 0) - sellQty)}`
-                                                : "—"}
+                                            {selectedItem ? `Qty ${Number(selectedItem.quantity) || 0} → ${Math.max(0, (Number(selectedItem.quantity) || 0) - sellQty)}` : "—"}
                                         </div>
                                     </div>
                                 </div>
@@ -944,10 +1272,7 @@ export default function SalesPage() {
                                         <button
                                             type="button"
                                             onClick={() => setSellForm((p) => ({ ...p, removeMode: "DECREMENT" }))}
-                                            className={[
-                                                "h-11 rounded-2xl border px-4 text-sm font-semibold transition",
-                                                sellForm.removeMode === "DECREMENT" ? "border-white/10 bg-white text-zinc-950" : "border-white/10 bg-white/5 text-white/90 hover:bg-white/10",
-                                            ].join(" ")}
+                                            className={["h-11 rounded-2xl border px-4 text-sm font-semibold transition", sellForm.removeMode === "DECREMENT" ? "border-white/10 bg-white text-zinc-950" : "border-white/10 bg-white/5 text-white/90 hover:bg-white/10"].join(" ")}
                                         >
                                             Decrement quantity
                                         </button>
@@ -955,19 +1280,12 @@ export default function SalesPage() {
                                         <button
                                             type="button"
                                             onClick={() => setSellForm((p) => ({ ...p, removeMode: "DELETE" }))}
-                                            className={[
-                                                "h-11 rounded-2xl border px-4 text-sm font-semibold transition",
-                                                sellForm.removeMode === "DELETE" ? "border-red-400/20 bg-red-500/10 text-red-100" : "border-white/10 bg-white/5 text-white/90 hover:bg-white/10",
-                                            ].join(" ")}
+                                            className={["h-11 rounded-2xl border px-4 text-sm font-semibold transition", sellForm.removeMode === "DELETE" ? "border-red-400/20 bg-red-500/10 text-red-100" : "border-white/10 bg-white/5 text-white/90 hover:bg-white/10"].join(" ")}
                                         >
                                             Delete item row
                                         </button>
 
-                                        {sellForm.removeMode === "DELETE" ? (
-                                            <div className="sm:col-span-2 text-xs text-zinc-300">
-                                                Delete will remove the entire inventory row (even if only some units are sold). Decrement is recommended.
-                                            </div>
-                                        ) : null}
+                                        {sellForm.removeMode === "DELETE" ? <div className="sm:col-span-2 text-xs text-zinc-300">Delete will remove the entire inventory row (even if only some units are sold). Decrement is recommended.</div> : null}
                                     </div>
                                 ) : null}
                             </div>
@@ -977,7 +1295,7 @@ export default function SalesPage() {
                                     value={sellForm.notes}
                                     onChange={(e) => setSellForm((p) => ({ ...p, notes: e.target.value }))}
                                     className="min-h-[110px] w-full resize-none rounded-2xl border border-white/10 bg-zinc-950/60 px-4 py-3 text-sm text-white outline-none focus:border-white/20"
-                                    placeholder="Optional… e.g. returned buyer, partial refund, bundle info…"
+                                    placeholder="Optional… e.g. bundle, partial refund, buyer issue…"
                                 />
                             </Field>
 
@@ -1026,11 +1344,7 @@ export default function SalesPage() {
                     maxWidth="max-w-4xl"
                     footer={
                         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-                            <button
-                                type="button"
-                                onClick={() => deleteSale(selectedSale.id)}
-                                className="h-11 rounded-2xl border border-red-400/20 bg-red-500/10 px-5 text-sm font-semibold text-red-100 hover:bg-red-500/15"
-                            >
+                            <button type="button" onClick={() => deleteSale(selectedSale.id)} className="h-11 rounded-2xl border border-red-400/20 bg-red-500/10 px-5 text-sm font-semibold text-red-100 hover:bg-red-500/15">
                                 Delete sale
                             </button>
 
@@ -1058,9 +1372,10 @@ function SaleDetail({ sale, currencyView, rates }) {
     const cur = (sale.currency || "GBP").toUpperCase()
     const qty = Number(sale.quantitySold || 0) || 0
     const ppu = Number(sale.salePricePerUnitPence || 0) || 0
-    const grossPence = qty * ppu
-    const feesPence = Number(sale.feesPence || 0) || 0
-    const netPence = sale.netPence != null ? Number(sale.netPence) || 0 : Math.max(0, grossPence - feesPence)
+    const revenuePence = qty * ppu
+
+    const costPence = Number(sale.costTotalPence || 0) || 0
+    const profitPence = revenuePence - costPence
 
     const toView = (minor) => fmt(currencyView, convertMinor(minor, cur, currencyView, rates).value)
 
@@ -1081,15 +1396,15 @@ function SaleDetail({ sale, currencyView, rates }) {
             <div className="rounded-3xl border border-white/10 bg-white/5 p-5">
                 <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-300">Finance</div>
                 <Row label={`Sale / unit (${cur})`} value={fmt(cur, ppu)} />
-                <Row label={`Gross (${cur})`} value={fmt(cur, grossPence)} />
-                <Row label={`Fees (${cur})`} value={fmt(cur, feesPence)} />
-                <Row label={`Net (${cur})`} value={fmt(cur, netPence)} />
+                <Row label={`Revenue (${cur})`} value={fmt(cur, revenuePence)} />
+                <Row label={`Cost (${cur})`} value={fmt(cur, costPence)} />
+                <Row label={`Profit (${cur})`} value={fmt(cur, profitPence)} />
 
                 <div className="mt-4 rounded-2xl border border-white/10 bg-zinc-950/30 p-4">
                     <div className="grid gap-2 sm:grid-cols-3">
-                        <Snapshot label={`Gross (${currencyView})`} value={toView(grossPence)} good />
-                        <Snapshot label={`Fees (${currencyView})`} value={toView(feesPence)} />
-                        <Snapshot label={`Net (${currencyView})`} value={toView(netPence)} good />
+                        <Snapshot label={`Revenue (${currencyView})`} value={toView(revenuePence)} good />
+                        <Snapshot label={`Cost (${currencyView})`} value={toView(costPence)} />
+                        <Snapshot label={`Profit (${currencyView})`} value={toView(profitPence)} good={profitPence >= 0} />
                     </div>
                 </div>
             </div>
