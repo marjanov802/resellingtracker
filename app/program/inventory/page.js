@@ -31,18 +31,7 @@ const PLATFORMS = [
     ["OTHER", "Other"],
 ]
 
-const CATEGORIES = [
-    "Clothes",
-    "Shoes",
-    "Tech",
-    "Collectables",
-    "Cards",
-    "Watches",
-    "Bags",
-    "Jewellery",
-    "Home",
-    "Other",
-]
+const CATEGORIES = ["Clothes", "Shoes", "Tech", "Collectables", "Cards", "Watches", "Bags", "Jewellery", "Home", "Other"]
 
 const CONDITIONS = ["New", "New (with tags)", "Like new", "Good", "Fair", "Poor"]
 
@@ -61,7 +50,7 @@ const convertMinor = (minor, fromCur, toCur, rates) => {
     if (f === t) return { value: m, ok: true }
     if (!rates || !rates[f] || !rates[t]) return { value: m, ok: false }
 
-    const amountUSD = (m / 100) / rates[f]
+    const amountUSD = m / 100 / rates[f]
     const amountTo = amountUSD * rates[t]
     return { value: Math.round(amountTo * 100), ok: true }
 }
@@ -82,14 +71,14 @@ const safeInt = (x, d = 0) => {
 const safeStr = (x) => String(x ?? "").trim()
 
 /**
- * Notes payload (v3)
+ * Notes payload (v4)
  * - purchaseTotalPence: total all-in purchase cost PER UNIT
- * - expectedBestPence / expectedWorstPence: expected sale PER UNIT
+ * - estimatedSalePence: estimated sale PER UNIT (used for UNLISTED)
  * - listings: array of { platform, url, pricePence } (price is per unit)
  */
 const encodeNotes = (plainNotes, meta) => {
     const payload = {
-        v: 3,
+        v: 4,
         notes: String(plainNotes || "").trim() || "",
         meta: meta && typeof meta === "object" ? meta : {},
     }
@@ -101,7 +90,7 @@ const decodeNotes = (notes) => {
     if (!s) return { notes: "", meta: {} }
     try {
         const o = JSON.parse(s)
-        if (o && typeof o === "object" && (o.v === 1 || o.v === 2 || o.v === 3)) {
+        if (o && typeof o === "object" && (o.v === 1 || o.v === 2 || o.v === 3 || o.v === 4)) {
             return { notes: String(o.notes || ""), meta: o.meta && typeof o.meta === "object" ? o.meta : {} }
         }
         return { notes: s, meta: {} }
@@ -112,14 +101,26 @@ const decodeNotes = (notes) => {
 
 function normaliseMeta(meta) {
     const m = meta && typeof meta === "object" ? meta : {}
+
     const currency = (m.currency || "GBP").toUpperCase()
     const status = (m.status || "UNLISTED").toUpperCase()
     const category = m.category || null
     const condition = m.condition || null
 
     const purchaseTotalPence = Number(m.purchaseTotalPence) || 0
-    const expectedBestPence = m.expectedBestPence == null ? null : Number(m.expectedBestPence)
-    const expectedWorstPence = m.expectedWorstPence == null ? null : Number(m.expectedWorstPence)
+    const estimatedSalePence = m.estimatedSalePence == null ? null : Number(m.estimatedSalePence)
+
+    const legacyBest = m.expectedBestPence == null ? null : Number(m.expectedBestPence)
+    const legacyWorst = m.expectedWorstPence == null ? null : Number(m.expectedWorstPence)
+
+    const estimatedFromLegacy =
+        estimatedSalePence != null
+            ? estimatedSalePence
+            : legacyBest != null
+                ? legacyBest
+                : legacyWorst != null
+                    ? legacyWorst
+                    : null
 
     const listings = Array.isArray(m.listings)
         ? m.listings
@@ -137,8 +138,7 @@ function normaliseMeta(meta) {
         category,
         condition,
         purchaseTotalPence,
-        expectedBestPence,
-        expectedWorstPence,
+        estimatedSalePence: estimatedFromLegacy,
         listings,
     }
 }
@@ -151,24 +151,19 @@ function compute(it) {
     const q = Number(it.quantity) || 0
     const status = meta.status
 
-    const purchaseTotalPerUnit =
-        meta.purchaseTotalPence > 0 ? meta.purchaseTotalPence : Number(it.costPence) || 0
-
+    const purchaseTotalPerUnit = meta.purchaseTotalPence > 0 ? meta.purchaseTotalPence : Number(it.costPence) || 0
     const purchaseTotal = purchaseTotalPerUnit * q
 
-    const bestPerUnit = meta.expectedBestPence == null ? null : meta.expectedBestPence
-    const worstPerUnit = meta.expectedWorstPence == null ? null : meta.expectedWorstPence
-
-    const profitBestPerUnit = bestPerUnit == null ? null : bestPerUnit - purchaseTotalPerUnit
-    const profitWorstPerUnit = worstPerUnit == null ? null : worstPerUnit - purchaseTotalPerUnit
-
-    const profitBestTotal = profitBestPerUnit == null ? null : profitBestPerUnit * q
-    const profitWorstTotal = profitWorstPerUnit == null ? null : profitWorstPerUnit * q
-
-    // primary listing display: first listing price if present
     const firstListing = meta.listings?.[0] || null
     const listingPricePerUnit = firstListing?.pricePence ?? null
-    const listingPriceTotal = listingPricePerUnit == null ? null : listingPricePerUnit * q
+
+    const salePricePerUnit =
+        status === "LISTED" || status === "SOLD" ? listingPricePerUnit : meta.estimatedSalePence == null ? null : meta.estimatedSalePence
+
+    const salePriceTotal = salePricePerUnit == null ? null : salePricePerUnit * q
+
+    const profitPerUnit = salePricePerUnit == null ? null : salePricePerUnit - purchaseTotalPerUnit
+    const profitTotal = profitPerUnit == null ? null : profitPerUnit * q
 
     return {
         notesPlain: decoded.notes,
@@ -179,11 +174,10 @@ function compute(it) {
         purchaseTotalPerUnit,
         purchaseTotal,
         listingPricePerUnit,
-        listingPriceTotal,
-        profitBestPerUnit,
-        profitWorstPerUnit,
-        profitBestTotal,
-        profitWorstTotal,
+        salePricePerUnit,
+        salePriceTotal,
+        profitPerUnit,
+        profitTotal,
     }
 }
 
@@ -196,11 +190,7 @@ function Pill({ text }) {
                 ? "border-blue-400/20 bg-blue-500/10 text-blue-100"
                 : "border-white/10 bg-white/5 text-zinc-200"
 
-    return (
-        <span className={["inline-flex items-center rounded-2xl border px-3 py-1 text-xs font-semibold", cls].join(" ")}>
-            {t}
-        </span>
-    )
+    return <span className={["inline-flex items-center rounded-2xl border px-2.5 py-1 text-[11px] font-semibold", cls].join(" ")}>{t}</span>
 }
 
 function Modal({ title, onClose, children, footer, maxWidth = "max-w-3xl" }) {
@@ -210,10 +200,7 @@ function Modal({ title, onClose, children, footer, maxWidth = "max-w-3xl" }) {
             <div className={["relative w-full rounded-3xl border border-white/10 bg-zinc-950/90 p-5 shadow-2xl backdrop-blur", maxWidth].join(" ")}>
                 <div className="mb-4 flex items-start justify-between gap-4">
                     <div className="text-lg font-semibold text-white">{title}</div>
-                    <button
-                        onClick={onClose}
-                        className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10"
-                    >
+                    <button onClick={onClose} className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10">
                         Close
                     </button>
                 </div>
@@ -230,26 +217,6 @@ function Field({ label, children, className = "" }) {
         <div className={["space-y-2", className].join(" ")}>
             <div className="text-xs font-semibold text-zinc-300">{label}</div>
             {children}
-        </div>
-    )
-}
-
-function SectionTabs({ tabs, value, onChange }) {
-    return (
-        <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-white/5 p-2">
-            {tabs.map((t) => (
-                <button
-                    key={t.value}
-                    type="button"
-                    onClick={() => onChange(t.value)}
-                    className={[
-                        "h-10 rounded-2xl px-4 text-sm font-semibold transition",
-                        value === t.value ? "bg-white text-zinc-950" : "bg-transparent text-white/90 hover:bg-white/10",
-                    ].join(" ")}
-                >
-                    {t.label}
-                </button>
-            ))}
         </div>
     )
 }
@@ -289,51 +256,127 @@ function linkify(url) {
     return `https://${u}`
 }
 
+function Snapshot({ label, value, good = false }) {
+    return (
+        <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+            <div className="text-[11px] font-semibold text-zinc-300">{label}</div>
+            <div className={["mt-1 text-sm font-semibold", good ? "text-emerald-200" : "text-white"].join(" ")}>{value}</div>
+        </div>
+    )
+}
+
+function IconButton({ title, onClick, className = "", children }) {
+    return (
+        <button
+            type="button"
+            title={title}
+            aria-label={title}
+            onClick={onClick}
+            className={["inline-flex h-8 w-8 items-center justify-center rounded-2xl border border-white/10 bg-white/10 text-white/90 transition hover:bg-white/15", className].join(" ")}
+        >
+            {children}
+        </button>
+    )
+}
+
+function PencilIcon({ className = "" }) {
+    return (
+        <svg viewBox="0 0 24 24" className={["h-4 w-4", className].join(" ")} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 20h9" />
+            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+        </svg>
+    )
+}
+
+function TrashIcon({ className = "" }) {
+    return (
+        <svg viewBox="0 0 24 24" className={["h-4 w-4", className].join(" ")} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 6h18" />
+            <path d="M8 6V4h8v2" />
+            <path d="M19 6l-1 14H6L5 6" />
+            <path d="M10 11v6" />
+            <path d="M14 11v6" />
+        </svg>
+    )
+}
+
 const DEFAULT_COLUMNS = {
+    status: true,
+
     sku: true,
     category: true,
     condition: true,
     quantity: true,
     purchase: true,
-    status: true,
-    listings: false, // show ALL listing links (chips) in the table
-    listingPrice: true,
+    salePrice: true,
+    profit: true,
 
-    // reseller finance / performance columns
+    listings: false,
     purchasePerUnit: false,
-    expectedBest: false,
-    expectedWorst: false,
-    bestProfit: true,
-    worstProfit: true,
-    bestProfitPerUnit: false,
-    worstProfitPerUnit: false,
-    roiBest: false,
-    roiWorst: false,
+    salePricePerUnit: false,
+    profitPerUnit: false,
+    roi: false,
     ageDays: false,
     updated: false,
 }
 
 const COLUMN_DEFS = [
-    { key: "sku", label: "SKU", width: "150px" },
-    { key: "category", label: "Category", width: "160px" },
-    { key: "condition", label: "Condition", width: "160px" },
-    { key: "quantity", label: "Qty", width: "80px" },
-    { key: "purchase", label: "Purchase total", width: "190px" },
-    { key: "purchasePerUnit", label: "Purchase / unit", width: "170px" },
-    { key: "status", label: "Status", width: "130px" },
+    { key: "status", label: "Status", width: "120px" },
+
+    { key: "sku", label: "SKU", width: "130px" },
+    { key: "category", label: "Category", width: "150px" },
+    { key: "condition", label: "Condition", width: "150px" },
+    { key: "quantity", label: "Qty", width: "70px" },
+    { key: "purchase", label: "Purchase total", width: "170px" },
+    { key: "salePrice", label: "Sale price", width: "170px" },
+    { key: "profit", label: "Profit", width: "170px" },
+    { key: "purchasePerUnit", label: "Purchase / unit", width: "150px" },
+    { key: "salePricePerUnit", label: "Sale / unit", width: "140px" },
+    { key: "profitPerUnit", label: "Profit / unit", width: "150px" },
+    { key: "roi", label: "ROI", width: "110px" },
     { key: "listings", label: "Listings", width: "420px" },
-    { key: "listingPrice", label: "Listing price", width: "170px" },
-    { key: "expectedBest", label: "Expected best total", width: "210px" },
-    { key: "expectedWorst", label: "Expected worst total", width: "210px" },
-    { key: "bestProfit", label: "Best profit", width: "170px" },
-    { key: "worstProfit", label: "Worst profit", width: "170px" },
-    { key: "bestProfitPerUnit", label: "Best profit / unit", width: "190px" },
-    { key: "worstProfitPerUnit", label: "Worst profit / unit", width: "190px" },
-    { key: "roiBest", label: "ROI best", width: "140px" },
-    { key: "roiWorst", label: "ROI worst", width: "140px" },
-    { key: "ageDays", label: "Age (days)", width: "120px" },
-    { key: "updated", label: "Updated", width: "190px" },
+    { key: "ageDays", label: "Age (days)", width: "110px" },
+    { key: "updated", label: "Updated", width: "180px" },
 ]
+
+function buildListingsFromForm({ status, listingPlatform, listingUrl, listingPrice, listings }) {
+    const st = String(status || "UNLISTED").toUpperCase()
+    const isListed = st === "LISTED" || st === "SOLD"
+
+    const primary = {
+        platform: (listingPlatform || "OTHER").toUpperCase(),
+        url: safeStr(listingUrl) || "",
+        pricePence: parseMoneyToPence(listingPrice),
+    }
+
+    const extras = Array.isArray(listings)
+        ? listings
+            .map((x) => ({
+                platform: (x?.platform || "OTHER").toUpperCase(),
+                url: safeStr(x?.url) || "",
+                pricePence: x?.pricePence == null ? null : Number(x.pricePence),
+            }))
+            .filter((x) => x.url || Number.isFinite(x.pricePence))
+        : []
+
+    if (!isListed) return []
+
+    const primaryOk = primary.url || primary.pricePence > 0
+    const merged = []
+
+    if (primaryOk) merged.push({ ...primary, pricePence: primary.pricePence > 0 ? primary.pricePence : null })
+    for (const e of extras) {
+        const dupe = merged.some(
+            (m) =>
+                String(m.platform || "").toUpperCase() === String(e.platform || "").toUpperCase() &&
+                String(m.url || "") === String(e.url || "") &&
+                Number(m.pricePence ?? null) === Number(e.pricePence ?? null)
+        )
+        if (!dupe) merged.push(e)
+    }
+
+    return merged
+}
 
 export default function InventoryPage() {
     const [items, setItems] = useState([])
@@ -349,7 +392,7 @@ export default function InventoryPage() {
     const [columns, setColumns] = useState(() => {
         if (typeof window === "undefined") return DEFAULT_COLUMNS
         try {
-            const raw = localStorage.getItem("rt_inventory_columns_v1")
+            const raw = localStorage.getItem("rt_inventory_columns_v2")
             if (!raw) return DEFAULT_COLUMNS
             const parsed = JSON.parse(raw)
             return { ...DEFAULT_COLUMNS, ...(parsed && typeof parsed === "object" ? parsed : {}) }
@@ -371,24 +414,19 @@ export default function InventoryPage() {
         error: null,
     })
 
-    // SEARCH (works like original: free text, NOT status)
     const [search, setSearch] = useState("")
 
-    // FILTERS
     const [filtersOpen, setFiltersOpen] = useState(false)
     const [filters, setFilters] = useState(() => ({
-        status: "ALL", // ALL | UNLISTED | LISTED | SOLD
-        category: "ALL", // ALL | category
-        condition: "ALL", // ALL | condition
-        platform: "ALL", // ALL | platform
+        status: "ALL",
+        category: "ALL",
+        condition: "ALL",
+        platform: "ALL",
         onlyWithLinks: false,
     }))
 
-    // ADD MODAL
     const [addOpen, setAddOpen] = useState(false)
     const [addSaving, setAddSaving] = useState(false)
-    const [addTab, setAddTab] = useState("BASIC")
-
     const [addForm, setAddForm] = useState(() => ({
         title: "",
         sku: "",
@@ -398,12 +436,9 @@ export default function InventoryPage() {
         condition: "Good",
         status: "UNLISTED",
 
-        // money (per unit)
         purchaseTotal: "0.00",
-        expectedBest: "0.00",
-        expectedWorst: "0.00",
+        estimatedSale: "0.00",
 
-        // listing (multi)
         listingPlatform: "EBAY",
         listingUrl: "",
         listingPrice: "0.00",
@@ -412,10 +447,8 @@ export default function InventoryPage() {
         notes: "",
     }))
 
-    // EDIT MODAL
     const [editOpen, setEditOpen] = useState(false)
     const [editSaving, setEditSaving] = useState(false)
-    const [editTab, setEditTab] = useState("BASIC")
     const [editItem, setEditItem] = useState(null)
     const [editForm, setEditForm] = useState(() => ({
         title: "",
@@ -426,12 +459,9 @@ export default function InventoryPage() {
         condition: "Good",
         status: "UNLISTED",
 
-        // money (per unit)
         purchaseTotal: "0.00",
-        expectedBest: "0.00",
-        expectedWorst: "0.00",
+        estimatedSale: "0.00",
 
-        // listing (multi)
         listingPlatform: "EBAY",
         listingUrl: "",
         listingPrice: "0.00",
@@ -495,9 +525,7 @@ export default function InventoryPage() {
     }, [currencyView])
 
     useEffect(() => {
-        if (typeof window !== "undefined") {
-            localStorage.setItem("rt_inventory_columns_v1", JSON.stringify(columns))
-        }
+        if (typeof window !== "undefined") localStorage.setItem("rt_inventory_columns_v2", JSON.stringify(columns))
     }, [columns])
 
     const toggleSelect = (id) => {
@@ -559,7 +587,6 @@ export default function InventoryPage() {
     }
 
     const openAdd = () => {
-        setAddTab("BASIC")
         setAddForm({
             title: "",
             sku: "",
@@ -570,8 +597,7 @@ export default function InventoryPage() {
             status: "UNLISTED",
 
             purchaseTotal: "0.00",
-            expectedBest: "0.00",
-            expectedWorst: "0.00",
+            estimatedSale: "0.00",
 
             listingPlatform: "EBAY",
             listingUrl: "",
@@ -586,18 +612,14 @@ export default function InventoryPage() {
     const onAddChange = (patch) => setAddForm((p) => ({ ...p, ...patch }))
 
     const addStatus = String(addForm.status || "UNLISTED").toUpperCase()
-    const showListingFieldsInAdd = addStatus === "LISTED" || addStatus === "SOLD"
-
-    useEffect(() => {
-        if (!showListingFieldsInAdd && addTab === "LISTING") setAddTab("BASIC")
-    }, [showListingFieldsInAdd, addTab])
+    const addIsListed = addStatus === "LISTED" || addStatus === "SOLD"
 
     const addListingToForm = () => {
         const url = safeStr(addForm.listingUrl)
-        if (!url) return showToast("error", "Listing link is required")
-        const platform = (addForm.listingPlatform || "OTHER").toUpperCase()
         const pricePence = parseMoneyToPence(addForm.listingPrice)
-        const listing = { platform, url, pricePence }
+        if (!url && pricePence <= 0) return showToast("error", "Add a listing link or a listing price")
+        const platform = (addForm.listingPlatform || "OTHER").toUpperCase()
+        const listing = { platform, url, pricePence: pricePence > 0 ? pricePence : null }
 
         onAddChange({
             listingUrl: "",
@@ -606,7 +628,7 @@ export default function InventoryPage() {
         })
     }
 
-    const removeListingFromForm = (idx) => {
+    const removeAddListingFromForm = (idx) => {
         const arr = Array.isArray(addForm.listings) ? [...addForm.listings] : []
         arr.splice(idx, 1)
         onAddChange({ listings: arr })
@@ -620,19 +642,15 @@ export default function InventoryPage() {
         const status = (addForm.status || "UNLISTED").toUpperCase()
 
         const purchaseTotalPence = parseMoneyToPence(addForm.purchaseTotal)
-        const expectedBestPence = parseMoneyToPence(addForm.expectedBest)
-        const expectedWorstPence = parseMoneyToPence(addForm.expectedWorst)
+        const estimatedSalePence = parseMoneyToPence(addForm.estimatedSale)
 
-        const listings =
-            showListingFieldsInAdd && Array.isArray(addForm.listings)
-                ? addForm.listings
-                    .map((x) => ({
-                        platform: (x?.platform || "OTHER").toUpperCase(),
-                        url: safeStr(x?.url) || "",
-                        pricePence: x?.pricePence == null ? null : Number(x.pricePence),
-                    }))
-                    .filter((x) => x.url || Number.isFinite(x.pricePence))
-                : []
+        const listings = buildListingsFromForm({
+            status,
+            listingPlatform: addForm.listingPlatform,
+            listingUrl: addForm.listingUrl,
+            listingPrice: addForm.listingPrice,
+            listings: addForm.listings,
+        })
 
         const meta = {
             currency: currencyView,
@@ -641,8 +659,7 @@ export default function InventoryPage() {
             condition: addForm.condition || null,
 
             purchaseTotalPence,
-            expectedBestPence,
-            expectedWorstPence,
+            estimatedSalePence,
 
             listings,
         }
@@ -678,9 +695,13 @@ export default function InventoryPage() {
         const decoded = decodeNotes(it.notes)
         const meta = normaliseMeta(decoded.meta)
 
-        setEditItem(it)
-        setEditTab("BASIC")
+        const first = meta.listings?.[0] || null
+        const firstPrice = first?.pricePence == null ? "0.00" : ((Number(first.pricePence) || 0) / 100).toFixed(2)
+        const firstUrl = first?.url || ""
+        const firstPlatform = (first?.platform || "EBAY").toUpperCase()
+        const rest = (meta.listings || []).slice(1).map((l) => ({ ...l }))
 
+        setEditItem(it)
         setEditForm({
             title: it.name || "",
             sku: it.sku || "",
@@ -691,13 +712,12 @@ export default function InventoryPage() {
             status: (meta.status || "UNLISTED").toUpperCase(),
 
             purchaseTotal: ((Number(meta.purchaseTotalPence || it.costPence || 0) || 0) / 100).toFixed(2),
-            expectedBest: meta.expectedBestPence == null ? "0.00" : ((Number(meta.expectedBestPence) || 0) / 100).toFixed(2),
-            expectedWorst: meta.expectedWorstPence == null ? "0.00" : ((Number(meta.expectedWorstPence) || 0) / 100).toFixed(2),
+            estimatedSale: meta.estimatedSalePence == null ? "0.00" : ((Number(meta.estimatedSalePence) || 0) / 100).toFixed(2),
 
-            listingPlatform: "EBAY",
-            listingUrl: "",
-            listingPrice: "0.00",
-            listings: Array.isArray(meta.listings) ? meta.listings.map((l) => ({ ...l })) : [],
+            listingPlatform: firstPlatform,
+            listingUrl: firstUrl,
+            listingPrice: firstPrice,
+            listings: rest,
 
             notes: decoded.notes || "",
         })
@@ -708,18 +728,14 @@ export default function InventoryPage() {
     const onEditChange = (patch) => setEditForm((p) => ({ ...p, ...patch }))
 
     const editStatus = String(editForm.status || "UNLISTED").toUpperCase()
-    const showListingFieldsInEdit = editStatus === "LISTED" || editStatus === "SOLD"
-
-    useEffect(() => {
-        if (!showListingFieldsInEdit && editTab === "LISTING") setEditTab("BASIC")
-    }, [showListingFieldsInEdit, editTab])
+    const editIsListed = editStatus === "LISTED" || editStatus === "SOLD"
 
     const addListingToEditForm = () => {
         const url = safeStr(editForm.listingUrl)
-        if (!url) return showToast("error", "Listing link is required")
-        const platform = (editForm.listingPlatform || "OTHER").toUpperCase()
         const pricePence = parseMoneyToPence(editForm.listingPrice)
-        const listing = { platform, url, pricePence }
+        if (!url && pricePence <= 0) return showToast("error", "Add a listing link or a listing price")
+        const platform = (editForm.listingPlatform || "OTHER").toUpperCase()
+        const listing = { platform, url, pricePence: pricePence > 0 ? pricePence : null }
 
         onEditChange({
             listingUrl: "",
@@ -744,19 +760,15 @@ export default function InventoryPage() {
         const status = (editForm.status || "UNLISTED").toUpperCase()
 
         const purchaseTotalPence = parseMoneyToPence(editForm.purchaseTotal)
-        const expectedBestPence = parseMoneyToPence(editForm.expectedBest)
-        const expectedWorstPence = parseMoneyToPence(editForm.expectedWorst)
+        const estimatedSalePence = parseMoneyToPence(editForm.estimatedSale)
 
-        const listings =
-            showListingFieldsInEdit && Array.isArray(editForm.listings)
-                ? editForm.listings
-                    .map((x) => ({
-                        platform: (x?.platform || "OTHER").toUpperCase(),
-                        url: safeStr(x?.url) || "",
-                        pricePence: x?.pricePence == null ? null : Number(x.pricePence),
-                    }))
-                    .filter((x) => x.url || Number.isFinite(x.pricePence))
-                : []
+        const listings = buildListingsFromForm({
+            status,
+            listingPlatform: editForm.listingPlatform,
+            listingUrl: editForm.listingUrl,
+            listingPrice: editForm.listingPrice,
+            listings: editForm.listings,
+        })
 
         const meta = {
             currency: currencyView,
@@ -765,8 +777,7 @@ export default function InventoryPage() {
             condition: editForm.condition || null,
 
             purchaseTotalPence,
-            expectedBestPence,
-            expectedWorstPence,
+            estimatedSalePence,
 
             listings,
         }
@@ -801,18 +812,12 @@ export default function InventoryPage() {
 
     const columnKeys = useMemo(() => {
         const keys = []
-        for (const def of COLUMN_DEFS) {
-            if (columns[def.key]) keys.push(def.key)
-        }
+        for (const def of COLUMN_DEFS) if (columns[def.key]) keys.push(def.key)
         return keys
     }, [columns])
 
-    const gridCols = useMemo(() => {
-        const base = ["44px", "minmax(260px, 1fr)"] // checkbox + title
-        const dynamic = columnKeys.map((k) => COLUMN_DEFS.find((d) => d.key === k)?.width || "160px")
-        const actions = ["190px"]
-        return [...base, ...dynamic, ...actions].join(" ")
-    }, [columnKeys])
+    const middleCols = useMemo(() => columnKeys.map((k) => COLUMN_DEFS.find((d) => d.key === k)).filter(Boolean), [columnKeys])
+    const middleGridCols = useMemo(() => middleCols.map((d) => d.width || "160px").join(" "), [middleCols])
 
     const filteredItems = useMemo(() => {
         const q = String(search || "").trim().toLowerCase()
@@ -823,22 +828,17 @@ export default function InventoryPage() {
         const platformF = String(filters.platform || "ALL").toUpperCase()
         const onlyLinks = !!filters.onlyWithLinks
 
-        const statusLabelMap = Object.fromEntries(
-            STATUSES.map(([value, label]) => [String(value).toUpperCase(), String(label)])
-        )
+        const statusLabelMap = Object.fromEntries(STATUSES.map(([value, label]) => [String(value).toUpperCase(), String(label)]))
 
         return items.filter((it) => {
             const c = compute(it)
 
-            // filters
             if (statusF !== "ALL" && c.status !== statusF) return false
             if (categoryF !== "ALL" && (c.meta.category || "—") !== categoryF) return false
             if (conditionF !== "ALL" && (c.meta.condition || "—") !== conditionF) return false
 
             if (platformF !== "ALL") {
-                const hasPlatform = (c.meta.listings || []).some(
-                    (l) => String(l.platform || "").toUpperCase() === platformF
-                )
+                const hasPlatform = (c.meta.listings || []).some((l) => String(l.platform || "").toUpperCase() === platformF)
                 if (!hasPlatform) return false
             }
 
@@ -847,7 +847,6 @@ export default function InventoryPage() {
                 if (!hasAnyLinks) return false
             }
 
-            // search (NOW includes status + platforms + listing urls)
             if (!q) return true
 
             const sku = String(it.sku ?? "").toLowerCase()
@@ -856,18 +855,11 @@ export default function InventoryPage() {
             const cond = String(c.meta.condition ?? "").toLowerCase()
             const notes = String(c.notesPlain ?? "").toLowerCase()
 
-            const statusCode = String(c.status ?? "").toLowerCase() // "listed"
-            const statusLabel = String(statusLabelMap[String(c.status ?? "").toUpperCase()] || "").toLowerCase() // "listed" / "unlisted" / "sold"
+            const statusCode = String(c.status ?? "").toLowerCase()
+            const statusLabel = String(statusLabelMap[String(c.status ?? "").toUpperCase()] || "").toLowerCase()
 
-            const listingPlatforms = (c.meta.listings || [])
-                .map((l) => String(l.platform || ""))
-                .join(" ")
-                .toLowerCase()
-
-            const listingUrls = (c.meta.listings || [])
-                .map((l) => String(l.url || ""))
-                .join(" ")
-                .toLowerCase()
+            const listingPlatforms = (c.meta.listings || []).map((l) => String(l.platform || "")).join(" ").toLowerCase()
+            const listingUrls = (c.meta.listings || []).map((l) => String(l.url || "")).join(" ").toLowerCase()
 
             return (
                 name.includes(q) ||
@@ -888,8 +880,8 @@ export default function InventoryPage() {
         const unitCount = filteredItems.reduce((a, it) => a + (Number(it.quantity) || 0), 0)
 
         let invested = 0
-        let best = 0
-        let worst = 0
+        let profit = 0
+        let withProfitCount = 0
 
         for (const it of filteredItems) {
             const c = compute(it)
@@ -897,11 +889,13 @@ export default function InventoryPage() {
 
             invested += toView(c.purchaseTotal)
 
-            if (c.profitBestTotal != null) best += toView(c.profitBestTotal)
-            if (c.profitWorstTotal != null) worst += toView(c.profitWorstTotal)
+            if (c.profitTotal != null) {
+                profit += toView(c.profitTotal)
+                withProfitCount += 1
+            }
         }
 
-        return { rowCount, unitCount, invested, best, worst }
+        return { rowCount, unitCount, invested, profit, withProfitCount }
     }, [filteredItems, currencyView, fx.rates])
 
     const renderPurchaseTotal = (it) => {
@@ -911,77 +905,67 @@ export default function InventoryPage() {
 
         return (
             <div className="flex flex-col leading-tight">
-                <span className="text-sm text-white">{fmt(currencyView, total)}</span>
+                <span className="text-[13px] text-white">{fmt(currencyView, total)}</span>
                 <span className="text-[11px] text-zinc-400">{fmt(currencyView, perUnit)} / unit</span>
             </div>
         )
     }
 
+    const renderSalePrice = (it) => {
+        const c = compute(it)
+        if (c.salePriceTotal == null) return <span className="text-zinc-400">—</span>
+        const v = convertMinor(c.salePriceTotal, c.itemCur, currencyView, fx.rates).value
+        return <span className="text-[13px] text-white">{fmt(currencyView, v)}</span>
+    }
+
+    const renderProfit = (it) => {
+        const c = compute(it)
+        if (c.profitTotal == null) return <span className="text-zinc-400">—</span>
+        const v = convertMinor(c.profitTotal, c.itemCur, currencyView, fx.rates).value
+        return <span className={v >= 0 ? "text-emerald-200 font-semibold text-[13px]" : "text-red-200 font-semibold text-[13px]"}>{fmt(currencyView, v)}</span>
+    }
+
     const renderPurchasePerUnit = (it) => {
         const c = compute(it)
-        const perUnit = convertMinor(c.purchaseTotalPerUnit, c.itemCur, currencyView, fx.rates).value
-        return <span className="text-sm text-white">{fmt(currencyView, perUnit)}</span>
+        const v = convertMinor(c.purchaseTotalPerUnit, c.itemCur, currencyView, fx.rates).value
+        return <span className="text-[13px] text-white">{fmt(currencyView, v)}</span>
     }
 
-    const renderExpectedTotal = (it, which) => {
+    const renderSalePerUnit = (it) => {
         const c = compute(it)
-        const perUnit = which === "BEST" ? c.meta.expectedBestPence : c.meta.expectedWorstPence
-        if (perUnit == null) return <span className="text-zinc-400">—</span>
-        const total = convertMinor(perUnit * c.q, c.itemCur, currencyView, fx.rates).value
-        return <span className="text-sm text-white">{fmt(currencyView, total)}</span>
+        if (c.salePricePerUnit == null) return <span className="text-zinc-400">—</span>
+        const v = convertMinor(c.salePricePerUnit, c.itemCur, currencyView, fx.rates).value
+        return <span className="text-[13px] text-white">{fmt(currencyView, v)}</span>
     }
 
-    const renderProfitTotal = (it, which) => {
+    const renderProfitPerUnit = (it) => {
         const c = compute(it)
-        const p = which === "BEST" ? c.profitBestTotal : c.profitWorstTotal
-        if (p == null) return <span className="text-zinc-400">—</span>
-        const v = convertMinor(p, c.itemCur, currencyView, fx.rates).value
-        return (
-            <span className={v >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>
-                {fmt(currencyView, v)}
-            </span>
-        )
+        if (c.profitPerUnit == null) return <span className="text-zinc-400">—</span>
+        const v = convertMinor(c.profitPerUnit, c.itemCur, currencyView, fx.rates).value
+        return <span className={v >= 0 ? "text-emerald-200 font-semibold text-[13px]" : "text-red-200 font-semibold text-[13px]"}>{fmt(currencyView, v)}</span>
     }
 
-    const renderProfitPerUnit = (it, which) => {
+    const renderROI = (it) => {
         const c = compute(it)
-        const p = which === "BEST" ? c.profitBestPerUnit : c.profitWorstPerUnit
-        if (p == null) return <span className="text-zinc-400">—</span>
-        const v = convertMinor(p, c.itemCur, currencyView, fx.rates).value
-        return (
-            <span className={v >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>
-                {fmt(currencyView, v)}
-            </span>
-        )
-    }
-
-    const renderROI = (it, which) => {
-        const c = compute(it)
-        const perUnit = c.purchaseTotalPerUnit || 0
-        const profitPerUnit = which === "BEST" ? c.profitBestPerUnit : c.profitWorstPerUnit
-        if (profitPerUnit == null || perUnit <= 0) return <span className="text-zinc-400">—</span>
-        const roi = (profitPerUnit / perUnit) * 100
-        const val = Number.isFinite(roi) ? roi : null
-        if (val == null) return <span className="text-zinc-400">—</span>
-        return (
-            <span className={val >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>
-                {val.toFixed(1)}%
-            </span>
-        )
+        const cost = c.purchaseTotalPerUnit || 0
+        if (c.profitPerUnit == null || cost <= 0) return <span className="text-zinc-400">—</span>
+        const roi = (c.profitPerUnit / cost) * 100
+        if (!Number.isFinite(roi)) return <span className="text-zinc-400">—</span>
+        return <span className={roi >= 0 ? "text-emerald-200 font-semibold text-[13px]" : "text-red-200 font-semibold text-[13px]"}>{roi.toFixed(1)}%</span>
     }
 
     const renderAgeDays = (it) => {
         const created = it.createdAt ? new Date(it.createdAt).getTime() : null
         if (!created || !Number.isFinite(created)) return <span className="text-zinc-400">—</span>
         const days = Math.max(0, Math.floor((Date.now() - created) / (1000 * 60 * 60 * 24)))
-        return <span className="text-sm text-white">{days}</span>
+        return <span className="text-[13px] text-white">{days}</span>
     }
 
     const renderUpdated = (it) => {
         if (!it.updatedAt) return <span className="text-zinc-400">—</span>
         const d = new Date(it.updatedAt)
         if (Number.isNaN(d.getTime())) return <span className="text-zinc-400">—</span>
-        return <span className="text-sm text-white">{d.toLocaleString()}</span>
+        return <span className="text-[13px] text-white">{d.toLocaleString()}</span>
     }
 
     const renderListingsChips = (it) => {
@@ -990,19 +974,22 @@ export default function InventoryPage() {
         if (!ls.length) return <span className="text-zinc-400">—</span>
 
         return (
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
                 {ls.map((l, idx) => {
                     const href = linkify(l.url)
                     const label = (l.platform || "LINK").toUpperCase()
                     return (
                         <a
                             key={`${label}-${idx}`}
-                            href={href}
+                            href={href || "#"}
                             target="_blank"
                             rel="noreferrer"
-                            title={href}
-                            onClick={(e) => e.stopPropagation()}
-                            className="inline-flex max-w-[220px] items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/90 hover:bg-white/10"
+                            title={href || "No URL"}
+                            onClick={(e) => {
+                                e.stopPropagation()
+                                if (!href) e.preventDefault()
+                            }}
+                            className="inline-flex max-w-[200px] items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-semibold text-white/90 hover:bg-white/10"
                         >
                             <span className="truncate">{label}</span>
                             <span className="text-white/50">↗</span>
@@ -1011,27 +998,6 @@ export default function InventoryPage() {
                 })}
             </div>
         )
-    }
-
-    const renderListingPrice = (it) => {
-        const c = compute(it)
-        if (c.listingPriceTotal == null) return <span className="text-zinc-400">—</span>
-        const v = convertMinor(c.listingPriceTotal, c.itemCur, currencyView, fx.rates).value
-        return <span className="text-sm text-white">{fmt(currencyView, v)}</span>
-    }
-
-    const toggleSelectAllVisible = () => {
-        const visibleIds = filteredItems.map((x) => x.id)
-        const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id))
-        setSelected((prev) => {
-            const next = new Set(prev)
-            if (allSelected) {
-                visibleIds.forEach((id) => next.delete(id))
-            } else {
-                visibleIds.forEach((id) => next.add(id))
-            }
-            return next
-        })
     }
 
     const resetFilters = () => {
@@ -1054,6 +1020,31 @@ export default function InventoryPage() {
         return n
     }, [filters])
 
+    const ROW_H = "h-[58px]"
+    const HEAD_H = "h-[42px]"
+    const CELL_PAD = "px-3"
+    const CELL_Y = "py-2"
+    const HEADER_BG = "bg-white/5"
+
+    const renderMiddleCell = (it, key) => {
+        if (key === "status") return <Pill text={compute(it).status} />
+        if (key === "sku") return <span className="text-[13px] text-zinc-200">{it.sku ?? "—"}</span>
+        if (key === "category") return <span className="text-[13px] text-zinc-200">{compute(it).meta.category ?? "—"}</span>
+        if (key === "condition") return <span className="text-[13px] text-zinc-200">{compute(it).meta.condition ?? "—"}</span>
+        if (key === "quantity") return <span className="text-[13px] text-zinc-200">{compute(it).q}</span>
+        if (key === "purchase") return renderPurchaseTotal(it)
+        if (key === "salePrice") return renderSalePrice(it)
+        if (key === "profit") return renderProfit(it)
+        if (key === "purchasePerUnit") return renderPurchasePerUnit(it)
+        if (key === "salePricePerUnit") return renderSalePerUnit(it)
+        if (key === "profitPerUnit") return renderProfitPerUnit(it)
+        if (key === "roi") return renderROI(it)
+        if (key === "listings") return renderListingsChips(it)
+        if (key === "ageDays") return renderAgeDays(it)
+        if (key === "updated") return renderUpdated(it)
+        return <span className="text-zinc-400">—</span>
+    }
+
     return (
         <div className="min-h-[calc(100vh-64px)] bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 text-zinc-50">
             <div className="mx-auto w-full max-w-[1400px] px-4 py-8">
@@ -1061,7 +1052,7 @@ export default function InventoryPage() {
                     <div>
                         <h1 className="text-3xl font-semibold tracking-tight">Inventory</h1>
                         <p className="mt-1 text-sm text-zinc-300">
-                            Customise columns, add items, bulk delete, and keep listing links per platform.
+                            Estimated sale is used for Unlisted. Listing price is used for Listed and Sold. Both show in the same Sale price column.
                         </p>
                     </div>
 
@@ -1090,7 +1081,6 @@ export default function InventoryPage() {
                             </button>
                         </div>
 
-                        {/* SEARCH BAR */}
                         <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
                             <input
                                 value={search}
@@ -1148,9 +1138,7 @@ export default function InventoryPage() {
                         <div
                             className={[
                                 "rounded-2xl border px-4 py-3 text-sm",
-                                toast.type === "error"
-                                    ? "border-red-400/20 bg-red-500/10 text-red-100"
-                                    : "border-emerald-400/20 bg-emerald-500/10 text-emerald-100",
+                                toast.type === "error" ? "border-red-400/20 bg-red-500/10 text-red-100" : "border-emerald-400/20 bg-emerald-500/10 text-emerald-100",
                             ].join(" ")}
                         >
                             {toast.msg}
@@ -1158,27 +1146,33 @@ export default function InventoryPage() {
                     </div>
                 ) : null}
 
-                <div className="mb-6 grid gap-4 md:grid-cols-5">
+                <div className="mb-6 grid gap-4 md:grid-cols-4">
                     <StatCard label="Items (rows)" value={totals.rowCount} sub="Visible records" />
                     <StatCard label="Quantity (units)" value={totals.unitCount} sub="Sum of visible quantities" />
                     <StatCard label={`Invested (${currencyView})`} value={fmt(currencyView, totals.invested)} sub="Visible purchase cost" />
-                    <StatCard label={`Best profit (${currencyView})`} value={fmt(currencyView, totals.best)} sub="Expected best sale - cost" />
-                    <StatCard label={`Worst profit (${currencyView})`} value={fmt(currencyView, totals.worst)} sub="Expected worst sale - cost" />
+                    <StatCard label={`Profit (${currencyView})`} value={fmt(currencyView, totals.profit)} sub={`${totals.withProfitCount} item(s) with sale price`} />
                 </div>
 
                 <div className="rounded-3xl border border-white/10 bg-white/5 p-5 shadow-lg backdrop-blur">
                     <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                         <div>
                             <div className="text-sm font-semibold text-white">Your items</div>
-                            <div className="text-xs text-zinc-300">
-                                {loading ? "Loading…" : `${filteredItems.length} row(s)`} • click a row for details
-                            </div>
+                            <div className="text-xs text-zinc-300">{loading ? "Loading…" : `${filteredItems.length} row(s)`} • click a row for details</div>
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2">
                             <button
                                 type="button"
-                                onClick={toggleSelectAllVisible}
+                                onClick={() => {
+                                    const visibleIds = filteredItems.map((x) => x.id)
+                                    const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id))
+                                    setSelected((prev) => {
+                                        const next = new Set(prev)
+                                        if (allSelected) visibleIds.forEach((id) => next.delete(id))
+                                        else visibleIds.forEach((id) => next.add(id))
+                                        return next
+                                    })
+                                }}
                                 className="h-10 rounded-2xl border border-white/10 bg-transparent px-4 text-sm font-semibold text-white/90 transition hover:bg-white/5"
                             >
                                 {(() => {
@@ -1199,61 +1193,30 @@ export default function InventoryPage() {
                         </div>
                     </div>
 
-                    {/* SIDE SCROLL */}
                     <div className="rounded-2xl border border-white/10 overflow-hidden">
-                        <div className="overflow-x-auto">
-                            <div className="min-w-[920px]">
-                                <div className="grid bg-white/5 text-xs font-semibold text-zinc-200" style={{ gridTemplateColumns: gridCols }}>
-                                    <div className="px-4 py-3"></div>
-                                    <div className="px-4 py-3">Title</div>
-
-                                    {columns.sku ? <div className="px-4 py-3">SKU</div> : null}
-                                    {columns.category ? <div className="px-4 py-3">Category</div> : null}
-                                    {columns.condition ? <div className="px-4 py-3">Condition</div> : null}
-                                    {columns.quantity ? <div className="px-4 py-3">Qty</div> : null}
-                                    {columns.purchase ? <div className="px-4 py-3">Purchase total</div> : null}
-                                    {columns.purchasePerUnit ? <div className="px-4 py-3">Purchase / unit</div> : null}
-                                    {columns.status ? <div className="px-4 py-3">Status</div> : null}
-                                    {columns.listings ? <div className="px-4 py-3">Listings</div> : null}
-                                    {columns.listingPrice ? <div className="px-4 py-3">Listing price</div> : null}
-
-                                    {columns.expectedBest ? <div className="px-4 py-3">Expected best total</div> : null}
-                                    {columns.expectedWorst ? <div className="px-4 py-3">Expected worst total</div> : null}
-
-                                    {columns.bestProfit ? <div className="px-4 py-3">Best profit</div> : null}
-                                    {columns.worstProfit ? <div className="px-4 py-3">Worst profit</div> : null}
-
-                                    {columns.bestProfitPerUnit ? <div className="px-4 py-3">Best profit / unit</div> : null}
-                                    {columns.worstProfitPerUnit ? <div className="px-4 py-3">Worst profit / unit</div> : null}
-
-                                    {columns.roiBest ? <div className="px-4 py-3">ROI best</div> : null}
-                                    {columns.roiWorst ? <div className="px-4 py-3">ROI worst</div> : null}
-
-                                    {columns.ageDays ? <div className="px-4 py-3">Age (days)</div> : null}
-                                    {columns.updated ? <div className="px-4 py-3">Updated</div> : null}
-
-                                    <div className="px-4 py-3 text-right">Actions</div>
+                        <div className="flex w-full">
+                            {/* LEFT FIXED: checkbox + TITLE ONLY */}
+                            <div className="shrink-0 border-r border-white/10" style={{ width: 380 }}>
+                                <div className={["flex items-center gap-3 border-b border-white/10", HEAD_H, CELL_PAD, HEADER_BG].join(" ")}>
+                                    <div className="w-[20px]" />
+                                    <div className="text-xs font-semibold text-zinc-200">Title</div>
                                 </div>
 
-                                {!loading && filteredItems.length === 0 ? (
-                                    <div className="px-4 py-6 text-sm text-zinc-300">No items match your filters / search.</div>
-                                ) : null}
-
                                 <div className="divide-y divide-white/10">
+                                    {!loading && filteredItems.length === 0 ? (
+                                        <div className={["text-sm text-zinc-300", CELL_PAD, "py-6"].join(" ")}>No items match your filters / search.</div>
+                                    ) : null}
+
                                     {filteredItems.map((it, idx) => {
-                                        const c = compute(it)
+                                        const rowBg = idx % 2 === 0 ? "bg-zinc-950" : "bg-zinc-900"
+
                                         return (
                                             <div
                                                 key={it.id}
-                                                className={[
-                                                    "grid cursor-pointer select-none",
-                                                    idx % 2 === 0 ? "bg-zinc-950/30" : "bg-zinc-950/10",
-                                                    "hover:bg-white/5",
-                                                ].join(" ")}
-                                                style={{ gridTemplateColumns: gridCols }}
+                                                className={["flex items-center gap-3 cursor-pointer", ROW_H, CELL_PAD, CELL_Y, rowBg, "hover:bg-white/5"].join(" ")}
                                                 onClick={() => openDetail(it)}
                                             >
-                                                <div className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                                                <div onClick={(e) => e.stopPropagation()}>
                                                     <input
                                                         type="checkbox"
                                                         checked={selected.has(it.id)}
@@ -1262,62 +1225,69 @@ export default function InventoryPage() {
                                                     />
                                                 </div>
 
-                                                <div className="px-4 py-3 text-sm text-zinc-200">
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="font-semibold text-white">{it.name}</span>
-                                                    </div>
-                                                    <div className="mt-1 text-[11px] text-zinc-400">
-                                                        {(c.meta.category || "—") + " • " + (c.meta.condition || "—")}
-                                                    </div>
+                                                <div className="min-w-0 w-full">
+                                                    <div className="truncate text-[13px] font-semibold text-white">{it.name}</div>
                                                 </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </div>
 
-                                                {columns.sku ? <div className="px-4 py-3 text-sm text-zinc-200">{it.sku ?? "—"}</div> : null}
-                                                {columns.category ? <div className="px-4 py-3 text-sm text-zinc-200">{c.meta.category ?? "—"}</div> : null}
-                                                {columns.condition ? <div className="px-4 py-3 text-sm text-zinc-200">{c.meta.condition ?? "—"}</div> : null}
-                                                {columns.quantity ? <div className="px-4 py-3 text-sm text-zinc-200">{c.q}</div> : null}
-                                                {columns.purchase ? <div className="px-4 py-3 text-sm text-zinc-200">{renderPurchaseTotal(it)}</div> : null}
-                                                {columns.purchasePerUnit ? <div className="px-4 py-3 text-sm text-zinc-200">{renderPurchasePerUnit(it)}</div> : null}
-                                                {columns.status ? (
-                                                    <div className="px-4 py-3 text-sm text-zinc-200">
-                                                        <Pill text={c.status} />
-                                                    </div>
-                                                ) : null}
-                                                {columns.listings ? <div className="px-4 py-3 text-sm text-zinc-200">{renderListingsChips(it)}</div> : null}
-                                                {columns.listingPrice ? <div className="px-4 py-3 text-sm text-zinc-200">{renderListingPrice(it)}</div> : null}
+                            {/* MIDDLE SCROLL: ALL DATA COLUMNS (status/profit/etc only show here if selected) */}
+                            <div className="min-w-0 flex-1 overflow-x-auto">
+                                <div className="min-w-max">
+                                    <div className={["grid border-b border-white/10", HEAD_H, HEADER_BG].join(" ")} style={{ gridTemplateColumns: middleGridCols }}>
+                                        {middleCols.map((d) => (
+                                            <div key={d.key} className={["flex items-center text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}>
+                                                {d.label}
+                                            </div>
+                                        ))}
+                                    </div>
 
-                                                {columns.expectedBest ? <div className="px-4 py-3 text-sm text-zinc-200">{renderExpectedTotal(it, "BEST")}</div> : null}
-                                                {columns.expectedWorst ? <div className="px-4 py-3 text-sm text-zinc-200">{renderExpectedTotal(it, "WORST")}</div> : null}
-
-                                                {columns.bestProfit ? <div className="px-4 py-3 text-sm text-zinc-200">{renderProfitTotal(it, "BEST")}</div> : null}
-                                                {columns.worstProfit ? <div className="px-4 py-3 text-sm text-zinc-200">{renderProfitTotal(it, "WORST")}</div> : null}
-
-                                                {columns.bestProfitPerUnit ? <div className="px-4 py-3 text-sm text-zinc-200">{renderProfitPerUnit(it, "BEST")}</div> : null}
-                                                {columns.worstProfitPerUnit ? <div className="px-4 py-3 text-sm text-zinc-200">{renderProfitPerUnit(it, "WORST")}</div> : null}
-
-                                                {columns.roiBest ? <div className="px-4 py-3 text-sm text-zinc-200">{renderROI(it, "BEST")}</div> : null}
-                                                {columns.roiWorst ? <div className="px-4 py-3 text-sm text-zinc-200">{renderROI(it, "WORST")}</div> : null}
-
-                                                {columns.ageDays ? <div className="px-4 py-3 text-sm text-zinc-200">{renderAgeDays(it)}</div> : null}
-                                                {columns.updated ? <div className="px-4 py-3 text-sm text-zinc-200">{renderUpdated(it)}</div> : null}
-
-                                                <div className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
-                                                    <div className="flex items-center justify-end gap-2">
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => openEdit(it)}
-                                                            className="rounded-2xl border border-white/10 bg-white/10 px-3 py-2 text-xs font-semibold text-white hover:bg-white/15"
-                                                        >
-                                                            Edit
-                                                        </button>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => singleDelete(it.id)}
-                                                            className="rounded-2xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/15"
-                                                        >
-                                                            Delete
-                                                        </button>
-                                                    </div>
+                                    <div className="divide-y divide-white/10">
+                                        {filteredItems.map((it, idx) => {
+                                            const rowBg = idx % 2 === 0 ? "bg-zinc-950" : "bg-zinc-900"
+                                            return (
+                                                <div
+                                                    key={it.id}
+                                                    className={["grid cursor-pointer", ROW_H, rowBg, "hover:bg-white/5"].join(" ")}
+                                                    style={{ gridTemplateColumns: middleGridCols }}
+                                                    onClick={() => openDetail(it)}
+                                                >
+                                                    {middleCols.map((d) => (
+                                                        <div key={d.key} className={["flex items-center", CELL_PAD, CELL_Y].join(" ")}>
+                                                            {renderMiddleCell(it, d.key)}
+                                                        </div>
+                                                    ))}
                                                 </div>
+                                            )
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* RIGHT FIXED: actions */}
+                            <div className="shrink-0 border-l border-white/10" style={{ width: 104 }}>
+                                <div className={["flex items-center justify-end border-b border-white/10", HEAD_H, CELL_PAD, HEADER_BG].join(" ")}>
+                                    <div className="text-xs font-semibold text-zinc-200">Actions</div>
+                                </div>
+
+                                <div className="divide-y divide-white/10">
+                                    {filteredItems.map((it, idx) => {
+                                        const rowBg = idx % 2 === 0 ? "bg-zinc-950" : "bg-zinc-900"
+                                        return (
+                                            <div
+                                                key={it.id}
+                                                className={["flex items-center justify-end gap-2", ROW_H, CELL_PAD, CELL_Y, rowBg].join(" ")}
+                                                onClick={(e) => e.stopPropagation()}
+                                            >
+                                                <IconButton title="Edit" onClick={() => openEdit(it)}>
+                                                    <PencilIcon />
+                                                </IconButton>
+                                                <IconButton title="Delete" onClick={() => singleDelete(it.id)} className="border-red-400/20 bg-red-500/10 text-red-100 hover:bg-red-500/15">
+                                                    <TrashIcon />
+                                                </IconButton>
                                             </div>
                                         )
                                     })}
@@ -1332,11 +1302,7 @@ export default function InventoryPage() {
                             <span>Attribution:</span>
                             <span
                                 className="text-zinc-300 underline underline-offset-2"
-                                dangerouslySetInnerHTML={{
-                                    __html:
-                                        fx.attributionHtml ||
-                                        '<a href="https://www.exchangerate-api.com">Rates By Exchange Rate API</a>',
-                                }}
+                                dangerouslySetInnerHTML={{ __html: fx.attributionHtml || '<a href="https://www.exchangerate-api.com">Rates By Exchange Rate API</a>' }}
                             />
                         </div>
                     </div>
@@ -1351,18 +1317,10 @@ export default function InventoryPage() {
                     maxWidth="max-w-2xl"
                     footer={
                         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-                            <button
-                                type="button"
-                                onClick={resetFilters}
-                                className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
-                            >
+                            <button type="button" onClick={resetFilters} className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10">
                                 Reset
                             </button>
-                            <button
-                                type="button"
-                                onClick={() => setFiltersOpen(false)}
-                                className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100"
-                            >
+                            <button type="button" onClick={() => setFiltersOpen(false)} className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100">
                                 Done
                             </button>
                         </div>
@@ -1450,18 +1408,10 @@ export default function InventoryPage() {
                     maxWidth="max-w-2xl"
                     footer={
                         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-                            <button
-                                type="button"
-                                onClick={() => setColumns(DEFAULT_COLUMNS)}
-                                className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
-                            >
+                            <button type="button" onClick={() => setColumns(DEFAULT_COLUMNS)} className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10">
                                 Reset to default
                             </button>
-                            <button
-                                type="button"
-                                onClick={() => setColumnsOpen(false)}
-                                className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100"
-                            >
+                            <button type="button" onClick={() => setColumnsOpen(false)} className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100">
                                 Done
                             </button>
                         </div>
@@ -1469,10 +1419,7 @@ export default function InventoryPage() {
                 >
                     <div className="grid gap-3 sm:grid-cols-2">
                         {COLUMN_DEFS.map((d) => (
-                            <label
-                                key={d.key}
-                                className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 hover:bg-white/10"
-                            >
+                            <label key={d.key} className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 hover:bg-white/10">
                                 <div className="text-sm font-semibold text-white">{d.label}</div>
                                 <input
                                     type="checkbox"
@@ -1483,13 +1430,9 @@ export default function InventoryPage() {
                             </label>
                         ))}
                     </div>
-                    <div className="mt-4 text-xs text-zinc-300">
-                        Tip: enable <span className="font-semibold text-white">Listings</span> to show all listing links as chips in the table.
-                    </div>
                 </Modal>
             ) : null}
 
-            {/* ADD MODAL */}
             {/* ADD MODAL */}
             {addOpen ? (
                 <Modal
@@ -1498,19 +1441,10 @@ export default function InventoryPage() {
                     maxWidth="max-w-4xl"
                     footer={
                         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                            <button
-                                type="button"
-                                onClick={() => setAddOpen(false)}
-                                className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
-                            >
+                            <button type="button" onClick={() => setAddOpen(false)} className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10">
                                 Cancel
                             </button>
-                            <button
-                                type="submit"
-                                form="rt-add-item"
-                                disabled={addSaving}
-                                className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100 disabled:opacity-60"
-                            >
+                            <button type="submit" form="rt-add-item" disabled={addSaving} className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100 disabled:opacity-60">
                                 {addSaving ? "Saving…" : "Create"}
                             </button>
                         </div>
@@ -1575,31 +1509,20 @@ export default function InventoryPage() {
                                 </select>
                             </Field>
 
-                            {/* STATUS TOGGLE */}
                             <div className="md:col-span-2">
                                 <div className="mb-1.5 text-xs font-semibold text-zinc-300">Status</div>
                                 <div className="inline-flex rounded-2xl border border-white/10 bg-white/5 p-1">
                                     <button
                                         type="button"
                                         onClick={() => onAddChange({ status: "UNLISTED" })}
-                                        className={[
-                                            "h-10 rounded-2xl px-4 text-sm font-semibold transition",
-                                            addForm.status === "UNLISTED"
-                                                ? "bg-white text-zinc-950"
-                                                : "text-white/90 hover:bg-white/10",
-                                        ].join(" ")}
+                                        className={["h-10 rounded-2xl px-4 text-sm font-semibold transition", addForm.status === "UNLISTED" ? "bg-white text-zinc-950" : "text-white/90 hover:bg-white/10"].join(" ")}
                                     >
                                         Unlisted
                                     </button>
                                     <button
                                         type="button"
                                         onClick={() => onAddChange({ status: "LISTED" })}
-                                        className={[
-                                            "h-10 rounded-2xl px-4 text-sm font-semibold transition",
-                                            addForm.status === "LISTED"
-                                                ? "bg-white text-zinc-950"
-                                                : "text-white/90 hover:bg-white/10",
-                                        ].join(" ")}
+                                        className={["h-10 rounded-2xl px-4 text-sm font-semibold transition", addForm.status === "LISTED" ? "bg-white text-zinc-950" : "text-white/90 hover:bg-white/10"].join(" ")}
                                     >
                                         Listed
                                     </button>
@@ -1616,87 +1539,96 @@ export default function InventoryPage() {
                                 />
                             </Field>
 
-                            {/* UNLISTED: expected best/worst */}
-                            {addForm.status !== "LISTED" ? (
-                                <>
-                                    <Field label="Expected best sale per unit">
-                                        <input
-                                            inputMode="decimal"
-                                            value={addForm.expectedBest}
-                                            onChange={(e) => onAddChange({ expectedBest: e.target.value })}
-                                            className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                            placeholder="0.00"
-                                        />
-                                    </Field>
-
-                                    <Field label="Expected worst sale per unit">
-                                        <input
-                                            inputMode="decimal"
-                                            value={addForm.expectedWorst}
-                                            onChange={(e) => onAddChange({ expectedWorst: e.target.value })}
-                                            className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                            placeholder="0.00"
-                                        />
-                                    </Field>
-                                </>
-                            ) : (
-                                /* LISTED: listing price */
-                                <Field label="Listed price per unit">
+                            {!addIsListed ? (
+                                <Field label="Estimated sale price per unit">
                                     <input
                                         inputMode="decimal"
-                                        value={addForm.listingPrice}
-                                        onChange={(e) => onAddChange({ listingPrice: e.target.value })}
+                                        value={addForm.estimatedSale}
+                                        onChange={(e) => onAddChange({ estimatedSale: e.target.value })}
                                         className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
                                         placeholder="0.00"
                                     />
                                 </Field>
+                            ) : (
+                                <>
+                                    <Field label="Listing price per unit">
+                                        <input
+                                            inputMode="decimal"
+                                            value={addForm.listingPrice}
+                                            onChange={(e) => onAddChange({ listingPrice: e.target.value })}
+                                            className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                            placeholder="0.00"
+                                        />
+                                    </Field>
+
+                                    <Field label="Listing platform">
+                                        <select
+                                            value={addForm.listingPlatform}
+                                            onChange={(e) => onAddChange({ listingPlatform: e.target.value })}
+                                            className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                        >
+                                            {PLATFORMS.filter(([v]) => v !== "NONE").map(([v, l]) => (
+                                                <option key={v} value={v}>
+                                                    {l}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </Field>
+
+                                    <Field label="Listing link (optional)" className="md:col-span-2">
+                                        <input
+                                            value={addForm.listingUrl}
+                                            onChange={(e) => onAddChange({ listingUrl: e.target.value })}
+                                            className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                            placeholder="https://…"
+                                        />
+                                    </Field>
+
+                                    <div className="md:col-span-2 flex items-center justify-end">
+                                        <button type="button" onClick={addListingToForm} className="h-11 rounded-2xl border border-white/10 bg-white/10 px-5 text-sm font-semibold text-white hover:bg-white/15">
+                                            Add extra link
+                                        </button>
+                                    </div>
+
+                                    {(Array.isArray(addForm.listings) ? addForm.listings : []).length ? (
+                                        <div className="md:col-span-2 space-y-2">
+                                            {addForm.listings.map((l, idx) => (
+                                                <div key={`${l.platform}-${idx}`} className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-zinc-950/30 p-3 sm:flex-row sm:items-center sm:justify-between">
+                                                    <div className="min-w-0">
+                                                        <div className="text-sm font-semibold text-white">{String(l.platform || "OTHER").toUpperCase()}</div>
+                                                        <div className="mt-1 text-xs text-zinc-400">
+                                                            {l.url ? linkify(l.url) : "No URL"} • {l.pricePence == null ? "No price" : fmt(currencyView, Number(l.pricePence) || 0)}
+                                                        </div>
+                                                    </div>
+                                                    <button type="button" onClick={() => removeAddListingFromForm(idx)} className="h-10 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 text-sm font-semibold text-red-100 hover:bg-red-500/15">
+                                                        Remove
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : null}
+                                </>
                             )}
 
-                            {/* SNAPSHOT */}
                             <div className="rounded-2xl border border-white/10 bg-zinc-950/30 p-4 md:col-span-2">
                                 <div className="grid gap-2 sm:grid-cols-3">
-                                    <Snapshot
-                                        label="Total cost"
-                                        value={fmt(currencyView, parseMoneyToPence(addForm.purchaseTotal) * safeInt(addForm.quantity, 0))}
-                                    />
-
-                                    {addForm.status !== "LISTED" ? (
+                                    <Snapshot label="Total cost" value={fmt(currencyView, parseMoneyToPence(addForm.purchaseTotal) * safeInt(addForm.quantity, 0))} />
+                                    {!addIsListed ? (
                                         <>
+                                            <Snapshot label="Estimated sale total" value={fmt(currencyView, parseMoneyToPence(addForm.estimatedSale) * safeInt(addForm.quantity, 0))} good />
                                             <Snapshot
-                                                label="Best profit"
-                                                value={fmt(
-                                                    currencyView,
-                                                    (parseMoneyToPence(addForm.expectedBest) -
-                                                        parseMoneyToPence(addForm.purchaseTotal)) *
-                                                    safeInt(addForm.quantity, 0)
-                                                )}
+                                                label="Estimated profit"
+                                                value={fmt(currencyView, (parseMoneyToPence(addForm.estimatedSale) - parseMoneyToPence(addForm.purchaseTotal)) * safeInt(addForm.quantity, 0))}
                                                 good
-                                            />
-                                            <Snapshot
-                                                label="Worst profit"
-                                                value={fmt(
-                                                    currencyView,
-                                                    (parseMoneyToPence(addForm.expectedWorst) -
-                                                        parseMoneyToPence(addForm.purchaseTotal)) *
-                                                    safeInt(addForm.quantity, 0)
-                                                )}
                                             />
                                         </>
                                     ) : (
                                         <>
+                                            <Snapshot label="Listed sale total" value={fmt(currencyView, parseMoneyToPence(addForm.listingPrice) * safeInt(addForm.quantity, 0))} good />
                                             <Snapshot
                                                 label="Listed profit"
-                                                value={fmt(
-                                                    currencyView,
-                                                    (parseMoneyToPence(addForm.listingPrice) -
-                                                        parseMoneyToPence(addForm.purchaseTotal)) *
-                                                    safeInt(addForm.quantity, 0)
-                                                )}
+                                                value={fmt(currencyView, (parseMoneyToPence(addForm.listingPrice) - parseMoneyToPence(addForm.purchaseTotal)) * safeInt(addForm.quantity, 0))}
                                                 good
-                                            />
-                                            <Snapshot
-                                                label="Listed price"
-                                                value={fmt(currencyView, parseMoneyToPence(addForm.listingPrice))}
                                             />
                                         </>
                                     )}
@@ -1715,7 +1647,6 @@ export default function InventoryPage() {
                     </form>
                 </Modal>
             ) : null}
-
 
             {/* EDIT MODAL */}
             {editOpen ? (
@@ -1738,278 +1669,201 @@ export default function InventoryPage() {
                             >
                                 Cancel
                             </button>
-                            <button
-                                type="submit"
-                                form="rt-edit-item"
-                                disabled={editSaving}
-                                className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100 disabled:opacity-60"
-                            >
+                            <button type="submit" form="rt-edit-item" disabled={editSaving} className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100 disabled:opacity-60">
                                 {editSaving ? "Saving…" : "Save changes"}
                             </button>
                         </div>
                     }
                 >
-                    <div className="mb-4">
-                        <SectionTabs
-                            value={editTab}
-                            onChange={setEditTab}
-                            tabs={[
-                                { value: "BASIC", label: "Basic" },
-                                { value: "FINANCE", label: "Finance" },
-                                ...(showListingFieldsInEdit ? [{ value: "LISTING", label: "Listing" }] : []),
-                            ]}
-                        />
-                    </div>
-
                     <form id="rt-edit-item" onSubmit={submitEdit} className="space-y-4">
-                        {editTab === "BASIC" ? (
-                            <div className="grid gap-4 md:grid-cols-2">
-                                <Field label="Title *">
-                                    <input
-                                        value={editForm.title}
-                                        onChange={(e) => onEditChange({ title: e.target.value })}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                        placeholder="e.g. Nike Air Max 95"
-                                        autoFocus
-                                    />
-                                </Field>
+                        <div className="grid gap-4 md:grid-cols-2">
+                            <Field label="Title *" className="md:col-span-2">
+                                <input
+                                    value={editForm.title}
+                                    onChange={(e) => onEditChange({ title: e.target.value })}
+                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    placeholder="e.g. Nike Air Max 95"
+                                    autoFocus
+                                />
+                            </Field>
 
-                                <Field label="SKU (optional)">
-                                    <input
-                                        value={editForm.sku}
-                                        onChange={(e) => onEditChange({ sku: e.target.value })}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                        placeholder="e.g. AM95-001"
-                                    />
-                                </Field>
+                            <Field label="SKU (optional)">
+                                <input
+                                    value={editForm.sku}
+                                    onChange={(e) => onEditChange({ sku: e.target.value })}
+                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    placeholder="e.g. AM95-001"
+                                />
+                            </Field>
 
-                                <Field label="Quantity (units)">
-                                    <input
-                                        type="number"
-                                        min={0}
-                                        value={editForm.quantity}
-                                        onChange={(e) => onEditChange({ quantity: e.target.value })}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                    />
-                                </Field>
+                            <Field label="Quantity (units)">
+                                <input
+                                    type="number"
+                                    min={0}
+                                    value={editForm.quantity}
+                                    onChange={(e) => onEditChange({ quantity: e.target.value })}
+                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                />
+                            </Field>
 
-                                <Field label="Status">
-                                    <select
-                                        value={editForm.status}
-                                        onChange={(e) => onEditChange({ status: e.target.value })}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                    >
-                                        {STATUSES.map(([v, l]) => (
-                                            <option key={v} value={v}>
-                                                {l}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </Field>
+                            <Field label="Category">
+                                <select
+                                    value={editForm.category}
+                                    onChange={(e) => onEditChange({ category: e.target.value })}
+                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                >
+                                    {CATEGORIES.map((c) => (
+                                        <option key={c} value={c}>
+                                            {c}
+                                        </option>
+                                    ))}
+                                </select>
+                            </Field>
 
-                                <Field label="Category">
-                                    <select
-                                        value={editForm.category}
-                                        onChange={(e) => onEditChange({ category: e.target.value })}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                    >
-                                        {CATEGORIES.map((c) => (
-                                            <option key={c} value={c}>
-                                                {c}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </Field>
+                            <Field label="Condition">
+                                <select
+                                    value={editForm.condition}
+                                    onChange={(e) => onEditChange({ condition: e.target.value })}
+                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                >
+                                    {CONDITIONS.map((c) => (
+                                        <option key={c} value={c}>
+                                            {c}
+                                        </option>
+                                    ))}
+                                </select>
+                            </Field>
 
-                                <Field label="Condition">
-                                    <select
-                                        value={editForm.condition}
-                                        onChange={(e) => onEditChange({ condition: e.target.value })}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                    >
-                                        {CONDITIONS.map((c) => (
-                                            <option key={c} value={c}>
-                                                {c}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </Field>
-
-                                <Field label="Notes" className="md:col-span-2">
-                                    <textarea
-                                        value={editForm.notes}
-                                        onChange={(e) => onEditChange({ notes: e.target.value })}
-                                        className="min-h-[110px] w-full resize-none rounded-2xl border border-white/10 bg-zinc-950/60 px-4 py-3 text-sm text-white outline-none focus:border-white/20"
-                                        placeholder="Anything useful…"
-                                    />
-                                </Field>
+                            <div className="md:col-span-2">
+                                <div className="mb-1.5 text-xs font-semibold text-zinc-300">Status</div>
+                                <select
+                                    value={editForm.status}
+                                    onChange={(e) => onEditChange({ status: e.target.value })}
+                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                >
+                                    {STATUSES.map(([v, l]) => (
+                                        <option key={v} value={v}>
+                                            {l}
+                                        </option>
+                                    ))}
+                                </select>
                             </div>
-                        ) : null}
 
-                        {editTab === "FINANCE" ? (
-                            <div className="grid gap-4 md:grid-cols-2">
-                                <Card title={`Finance (${currencyView})`}>
-                                    <div className="grid gap-4 md:grid-cols-2">
-                                        <Field label="Total purchase price (all-in) per unit">
-                                            <input
-                                                inputMode="decimal"
-                                                value={editForm.purchaseTotal}
-                                                onChange={(e) => onEditChange({ purchaseTotal: e.target.value })}
-                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                                placeholder="0.00"
-                                            />
-                                        </Field>
+                            <Field label="Total purchase price (all-in) per unit">
+                                <input
+                                    inputMode="decimal"
+                                    value={editForm.purchaseTotal}
+                                    onChange={(e) => onEditChange({ purchaseTotal: e.target.value })}
+                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    placeholder="0.00"
+                                />
+                            </Field>
 
-                                        <Field label="Expected best sale per unit">
-                                            <input
-                                                inputMode="decimal"
-                                                value={editForm.expectedBest}
-                                                onChange={(e) => onEditChange({ expectedBest: e.target.value })}
-                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                                placeholder="0.00"
-                                            />
-                                        </Field>
+                            {!editIsListed ? (
+                                <Field label="Estimated sale price per unit">
+                                    <input
+                                        inputMode="decimal"
+                                        value={editForm.estimatedSale}
+                                        onChange={(e) => onEditChange({ estimatedSale: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                        placeholder="0.00"
+                                    />
+                                </Field>
+                            ) : (
+                                <>
+                                    <Field label="Listing price per unit">
+                                        <input
+                                            inputMode="decimal"
+                                            value={editForm.listingPrice}
+                                            onChange={(e) => onEditChange({ listingPrice: e.target.value })}
+                                            className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                            placeholder="0.00"
+                                        />
+                                    </Field>
 
-                                        <Field label="Expected worst sale per unit" className="md:col-span-2">
-                                            <input
-                                                inputMode="decimal"
-                                                value={editForm.expectedWorst}
-                                                onChange={(e) => onEditChange({ expectedWorst: e.target.value })}
-                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                                placeholder="0.00"
-                                            />
-                                        </Field>
+                                    <Field label="Listing platform">
+                                        <select
+                                            value={editForm.listingPlatform}
+                                            onChange={(e) => onEditChange({ listingPlatform: e.target.value })}
+                                            className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                        >
+                                            {PLATFORMS.filter(([v]) => v !== "NONE").map(([v, l]) => (
+                                                <option key={v} value={v}>
+                                                    {l}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </Field>
+
+                                    <Field label="Listing link (optional)" className="md:col-span-2">
+                                        <input
+                                            value={editForm.listingUrl}
+                                            onChange={(e) => onEditChange({ listingUrl: e.target.value })}
+                                            className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                            placeholder="https://…"
+                                        />
+                                    </Field>
+
+                                    <div className="md:col-span-2 flex items-center justify-end">
+                                        <button type="button" onClick={addListingToEditForm} className="h-11 rounded-2xl border border-white/10 bg-white/10 px-5 text-sm font-semibold text-white hover:bg-white/15">
+                                            Add extra link
+                                        </button>
                                     </div>
 
-                                    <div className="mt-4 rounded-2xl border border-white/10 bg-zinc-950/30 p-4">
-                                        <div className="text-xs font-semibold text-zinc-300">Quick snapshot</div>
-                                        <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                                            <Snapshot label="Total cost" value={fmt(currencyView, parseMoneyToPence(editForm.purchaseTotal) * safeInt(editForm.quantity, 0))} />
+                                    {(Array.isArray(editForm.listings) ? editForm.listings : []).length ? (
+                                        <div className="md:col-span-2 space-y-2">
+                                            {editForm.listings.map((l, idx) => (
+                                                <div key={`${l.platform}-${idx}`} className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-zinc-950/30 p-3 sm:flex-row sm:items-center sm:justify-between">
+                                                    <div className="min-w-0">
+                                                        <div className="text-sm font-semibold text-white">{String(l.platform || "OTHER").toUpperCase()}</div>
+                                                        <div className="mt-1 text-xs text-zinc-400">
+                                                            {l.url ? linkify(l.url) : "No URL"} • {l.pricePence == null ? "No price" : fmt(currencyView, Number(l.pricePence) || 0)}
+                                                        </div>
+                                                    </div>
+                                                    <button type="button" onClick={() => removeListingFromEditForm(idx)} className="h-10 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 text-sm font-semibold text-red-100 hover:bg-red-500/15">
+                                                        Remove
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : null}
+                                </>
+                            )}
+
+                            <div className="rounded-2xl border border-white/10 bg-zinc-950/30 p-4 md:col-span-2">
+                                <div className="grid gap-2 sm:grid-cols-3">
+                                    <Snapshot label="Total cost" value={fmt(currencyView, parseMoneyToPence(editForm.purchaseTotal) * safeInt(editForm.quantity, 0))} />
+                                    {!editIsListed ? (
+                                        <>
+                                            <Snapshot label="Estimated sale total" value={fmt(currencyView, parseMoneyToPence(editForm.estimatedSale) * safeInt(editForm.quantity, 0))} good />
                                             <Snapshot
-                                                label="Best profit"
-                                                value={fmt(
-                                                    currencyView,
-                                                    (parseMoneyToPence(editForm.expectedBest) - parseMoneyToPence(editForm.purchaseTotal)) * safeInt(editForm.quantity, 0)
-                                                )}
+                                                label="Estimated profit"
+                                                value={fmt(currencyView, (parseMoneyToPence(editForm.estimatedSale) - parseMoneyToPence(editForm.purchaseTotal)) * safeInt(editForm.quantity, 0))}
                                                 good
                                             />
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Snapshot label="Listed sale total" value={fmt(currencyView, parseMoneyToPence(editForm.listingPrice) * safeInt(editForm.quantity, 0))} good />
                                             <Snapshot
-                                                label="Worst profit"
-                                                value={fmt(
-                                                    currencyView,
-                                                    (parseMoneyToPence(editForm.expectedWorst) - parseMoneyToPence(editForm.purchaseTotal)) * safeInt(editForm.quantity, 0)
-                                                )}
+                                                label="Listed profit"
+                                                value={fmt(currencyView, (parseMoneyToPence(editForm.listingPrice) - parseMoneyToPence(editForm.purchaseTotal)) * safeInt(editForm.quantity, 0))}
+                                                good
                                             />
-                                        </div>
-                                        <div className="mt-2 text-[11px] text-zinc-400">Fees and sold breakdown can come later.</div>
-                                    </div>
-                                </Card>
-
-                                <Card title="Finance notes">
-                                    <ul className="space-y-2 text-sm text-zinc-300">
-                                        <li>• Purchase is all-in per unit (what it actually cost you).</li>
-                                        <li>• Expected best and worst are your range per unit.</li>
-                                        <li>• Display currency is global; values convert using FX.</li>
-                                    </ul>
-                                </Card>
+                                        </>
+                                    )}
+                                </div>
                             </div>
-                        ) : null}
 
-                        {editTab === "LISTING" && showListingFieldsInEdit ? (
-                            <div className="grid gap-4 md:grid-cols-2">
-                                <Card title="Edit listing link(s)">
-                                    <div className="grid gap-4 md:grid-cols-2">
-                                        <Field label="Platform">
-                                            <select
-                                                value={editForm.listingPlatform}
-                                                onChange={(e) => onEditChange({ listingPlatform: e.target.value })}
-                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                            >
-                                                {PLATFORMS.filter(([v]) => v !== "NONE").map(([v, l]) => (
-                                                    <option key={v} value={v}>
-                                                        {l}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                        </Field>
-
-                                        <Field label="Listing link (URL)">
-                                            <input
-                                                value={editForm.listingUrl}
-                                                onChange={(e) => onEditChange({ listingUrl: e.target.value })}
-                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                                placeholder="https://…"
-                                            />
-                                        </Field>
-
-                                        <Field label="Listing price per unit (optional)">
-                                            <input
-                                                inputMode="decimal"
-                                                value={editForm.listingPrice}
-                                                onChange={(e) => onEditChange({ listingPrice: e.target.value })}
-                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                                placeholder="0.00"
-                                            />
-                                        </Field>
-
-                                        <div className="flex items-end">
-                                            <button
-                                                type="button"
-                                                onClick={addListingToEditForm}
-                                                className="h-11 w-full rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white hover:bg-white/15"
-                                            >
-                                                Add link
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    <div className="mt-4 space-y-2">
-                                        {(Array.isArray(editForm.listings) ? editForm.listings : []).length === 0 ? (
-                                            <div className="text-sm text-zinc-300">No links added yet.</div>
-                                        ) : (
-                                            (editForm.listings || []).map((l, idx) => {
-                                                const href = linkify(l.url)
-                                                return (
-                                                    <div
-                                                        key={`${l.platform}-${idx}`}
-                                                        className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-zinc-950/30 p-3 sm:flex-row sm:items-center sm:justify-between"
-                                                    >
-                                                        <div className="min-w-0">
-                                                            <div className="text-sm font-semibold text-white">{l.platform}</div>
-                                                            <a
-                                                                href={href}
-                                                                target="_blank"
-                                                                rel="noreferrer"
-                                                                className="block truncate text-xs text-zinc-300 underline underline-offset-2 hover:text-white"
-                                                            >
-                                                                {href}
-                                                            </a>
-                                                            <div className="mt-1 text-xs text-zinc-400">
-                                                                Price: {l.pricePence == null ? "—" : fmt(currencyView, l.pricePence)}
-                                                            </div>
-                                                        </div>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => removeListingFromEditForm(idx)}
-                                                            className="h-10 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 text-sm font-semibold text-red-100 hover:bg-red-500/15"
-                                                        >
-                                                            Remove
-                                                        </button>
-                                                    </div>
-                                                )
-                                            })
-                                        )}
-                                    </div>
-                                </Card>
-
-                                <Card title="Tip">
-                                    <div className="text-sm text-zinc-300">
-                                        You can add multiple listing links across platforms. Enable the <span className="font-semibold text-white">Listings</span>{" "}
-                                        column to show them in the table.
-                                    </div>
-                                </Card>
-                            </div>
-                        ) : null}
+                            <Field label="Notes" className="md:col-span-2">
+                                <textarea
+                                    value={editForm.notes}
+                                    onChange={(e) => onEditChange({ notes: e.target.value })}
+                                    className="min-h-[110px] w-full resize-none rounded-2xl border border-white/10 bg-zinc-950/60 px-4 py-3 text-sm text-white outline-none focus:border-white/20"
+                                    placeholder="Anything useful…"
+                                />
+                            </Field>
+                        </div>
                     </form>
                 </Modal>
             ) : null}
@@ -2025,19 +1879,11 @@ export default function InventoryPage() {
                     maxWidth="max-w-5xl"
                     footer={
                         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-                            <button
-                                type="button"
-                                onClick={() => singleDelete(detailItem.id)}
-                                className="h-11 rounded-2xl border border-red-400/20 bg-red-500/10 px-5 text-sm font-semibold text-red-100 hover:bg-red-500/15"
-                            >
+                            <button type="button" onClick={() => singleDelete(detailItem.id)} className="h-11 rounded-2xl border border-red-400/20 bg-red-500/10 px-5 text-sm font-semibold text-red-100 hover:bg-red-500/15">
                                 Delete
                             </button>
 
-                            <button
-                                type="button"
-                                onClick={() => openEdit(detailItem)}
-                                className="h-11 rounded-2xl border border-white/10 bg-white/10 px-5 text-sm font-semibold text-white hover:bg-white/15"
-                            >
+                            <button type="button" onClick={() => openEdit(detailItem)} className="h-11 rounded-2xl border border-white/10 bg-white/10 px-5 text-sm font-semibold text-white hover:bg-white/15">
                                 Edit
                             </button>
                         </div>
@@ -2050,24 +1896,16 @@ export default function InventoryPage() {
     )
 }
 
-function Snapshot({ label, value, good = false }) {
-    return (
-        <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-            <div className="text-[11px] font-semibold text-zinc-300">{label}</div>
-            <div className={["mt-1 text-sm font-semibold", good ? "text-emerald-200" : "text-white"].join(" ")}>{value}</div>
-        </div>
-    )
-}
-
 function DetailPanel({ item, currencyView, rates }) {
     const c = compute(item)
     const toView = (minor) => fmt(currencyView, convertMinor(minor, c.itemCur, currencyView, rates).value)
-    const showListing = c.status === "LISTED" || c.status === "SOLD"
 
-    const bestProfit =
-        c.profitBestTotal == null ? null : convertMinor(c.profitBestTotal, c.itemCur, currencyView, rates).value
-    const worstProfit =
-        c.profitWorstTotal == null ? null : convertMinor(c.profitWorstTotal, c.itemCur, currencyView, rates).value
+    const profit = c.profitTotal == null ? null : convertMinor(c.profitTotal, c.itemCur, currencyView, rates).value
+    const profitUnit = c.profitPerUnit == null ? null : convertMinor(c.profitPerUnit, c.itemCur, currencyView, rates).value
+    const saleTotal = c.salePriceTotal == null ? null : convertMinor(c.salePriceTotal, c.itemCur, currencyView, rates).value
+
+    const status = String(c.status || "").toUpperCase()
+    const saleLabel = status === "LISTED" || status === "SOLD" ? "Listing price" : "Estimated sale"
 
     return (
         <div className="grid gap-4 md:grid-cols-2">
@@ -2081,59 +1919,49 @@ function DetailPanel({ item, currencyView, rates }) {
 
             <Card title={`Finance (${currencyView})`}>
                 <Row label="Total purchase" value={toView(c.purchaseTotal)} />
-                <Row label="Expected best total" value={c.meta.expectedBestPence == null ? "—" : toView(c.meta.expectedBestPence * c.q)} />
-                <Row label="Expected worst total" value={c.meta.expectedWorstPence == null ? "—" : toView(c.meta.expectedWorstPence * c.q)} />
+                <Row label={`${saleLabel} total`} value={saleTotal == null ? "—" : fmt(currencyView, saleTotal)} />
                 <Row
-                    label="Best profit"
+                    label="Profit total"
                     value={
-                        bestProfit == null ? (
+                        profit == null ? (
                             "—"
                         ) : (
-                            <span className={bestProfit >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>
-                                {fmt(currencyView, bestProfit)}
-                            </span>
+                            <span className={profit >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>{fmt(currencyView, profit)}</span>
                         )
                     }
                 />
                 <Row
-                    label="Worst profit"
+                    label="Profit / unit"
                     value={
-                        worstProfit == null ? (
+                        profitUnit == null ? (
                             "—"
                         ) : (
-                            <span className={worstProfit >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>
-                                {fmt(currencyView, worstProfit)}
-                            </span>
+                            <span className={profitUnit >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>{fmt(currencyView, profitUnit)}</span>
                         )
                     }
                 />
             </Card>
 
             <Card title="Listing links" className="md:col-span-2">
-                {!showListing ? (
-                    <div className="text-sm text-zinc-300">Not listed. Listing links appear when status is Listed or Sold.</div>
-                ) : (c.meta.listings || []).length === 0 ? (
-                    <div className="text-sm text-zinc-300">No listing links added.</div>
+                {(c.meta.listings || []).length === 0 ? (
+                    <div className="text-sm text-zinc-300">No listing links / prices added.</div>
                 ) : (
                     <div className="grid gap-2 md:grid-cols-2">
                         {(c.meta.listings || []).map((l, idx) => {
                             const href = linkify(l.url)
-                            const price = l.pricePence == null ? "—" : toView((l.pricePence || 0) * c.q)
                             return (
                                 <div key={`${l.platform}-${idx}`} className="rounded-2xl border border-white/10 bg-zinc-950/30 p-4">
                                     <div className="flex items-center justify-between gap-3">
-                                        <div className="text-sm font-semibold text-white">{l.platform}</div>
-                                        <div className="text-xs text-zinc-300">Listing: {price}</div>
+                                        <div className="text-sm font-semibold text-white">{String(l.platform || "OTHER").toUpperCase()}</div>
+                                        <div className="text-xs text-zinc-300">{l.pricePence == null ? "No price" : `Price: ${toView(Number(l.pricePence) || 0)}`}</div>
                                     </div>
-                                    <a
-                                        href={href}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="mt-2 block truncate text-xs text-zinc-300 underline underline-offset-2 hover:text-white"
-                                        title={href}
-                                    >
-                                        {href}
-                                    </a>
+                                    {href ? (
+                                        <a href={href} target="_blank" rel="noreferrer" className="mt-2 block truncate text-xs text-zinc-300 underline underline-offset-2 hover:text-white" title={href}>
+                                            {href}
+                                        </a>
+                                    ) : (
+                                        <div className="mt-2 text-xs text-zinc-400">No URL</div>
+                                    )}
                                 </div>
                             )
                         })}
