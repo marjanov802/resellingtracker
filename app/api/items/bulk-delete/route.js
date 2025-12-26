@@ -1,50 +1,25 @@
+// FILE: app/api/items/bulk-delete/route.js
 import { NextResponse } from "next/server"
-import { PrismaClient } from "@prisma/client"
+import { currentUser } from "@clerk/nextjs/server"
+import { prisma } from "../../../lib/prisma"
 
+export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-// Prevent Prisma from creating multiple clients in dev
-const globalForPrisma = globalThis
-
-const prisma =
-    globalForPrisma.__prisma ||
-    new PrismaClient({
-        log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
-    })
-
-if (process.env.NODE_ENV !== "production") {
-    globalForPrisma.__prisma = prisma
-}
-
-const cleanId = (v) => String(v ?? "").trim()
-
 export async function POST(req) {
+    const u = await currentUser()
+    if (!u) return NextResponse.json({ error: "Unauthenticated" }, { status: 401 })
+
+    const body = await req.json().catch(() => null)
+    const ids = Array.isArray(body?.ids) ? body.ids.map((x) => String(x)) : []
+    if (!ids.length) return NextResponse.json({ error: "ids is required" }, { status: 400 })
+
     try {
-        const body = await req.json().catch(() => null)
-        const idsRaw = Array.isArray(body?.ids) ? body.ids : []
-        const ids = [...new Set(idsRaw.map(cleanId).filter(Boolean))]
-
-        if (ids.length === 0) {
-            return NextResponse.json(
-                { error: "No ids provided" },
-                { status: 400 }
-            )
-        }
-
         const result = await prisma.item.deleteMany({
-            where: {
-                id: { in: ids },
-            },
+            where: { userId: u.id, id: { in: ids } },
         })
-
-        return NextResponse.json({
-            ok: true,
-            deleted: result.count,
-        })
+        return NextResponse.json({ ok: true, deleted: result.count })
     } catch (e) {
-        return NextResponse.json(
-            { error: e?.message || "Bulk delete failed" },
-            { status: 500 }
-        )
+        return NextResponse.json({ error: e?.message || "Bulk delete failed" }, { status: 500 })
     }
 }

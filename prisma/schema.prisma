@@ -68,30 +68,27 @@ model Item {
   sku       String?
   quantity  Int      @default(1)
 
-  currency          Currency      @default(GBP)
+  currency  Currency @default(GBP)
 
-  // YOUR TOTAL COST BASIS (per unit, all-in)
-  // purchaseSubtotal = item price you paid
-  // purchaseFees = payment fees etc
-  // purchaseShipping = postage you paid
+  // cost basis per unit (all-in)
   purchaseSubtotalPence Int @default(0)
   purchaseFeesPence     Int @default(0)
   purchaseShippingPence Int @default(0)
 
-  // LISTING / SELLING
+  // listing / selling
   status   ItemStatus      @default(UNLISTED)
   platform SellingPlatform @default(NONE)
 
-  listedPricePence        Int?      // price shown on listing (per unit)
-  buyerTotalPence         Int?      // total buyer pays (incl buyer postage etc) (per unit)
-  soldAt  DateTime?
+  listedPricePence  Int?
+  buyerTotalPence   Int?
+  soldAt            DateTime?
 
-  // FEES (per unit)
-  platformFeePence        Int?      // platform fee
-  paymentProcessingFeePence Int?    // stripe/paypal etc
-  postageChargedToBuyerPence Int?   // the shipping buyer paid (if tracked separately)
+  // fees (per unit)
+  platformFeePence            Int?
+  paymentProcessingFeePence   Int?
+  postageChargedToBuyerPence  Int?
 
-  // EXPECTED RANGE (optional) (per unit)
+  // expected range (optional) (per unit)
   expectedBestPence  Int?
   expectedWorstPence Int?
 
@@ -102,10 +99,43 @@ model Item {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  sales     Sale[]
+
   @@index([userId])
   @@index([userId, status])
   @@index([userId, category])
   @@index([userId, condition])
 
   @@unique([userId, sku])
+}
+
+model Sale {
+  id        String   @id @default(cuid())
+  userId    String
+
+  itemId    String?
+  item      Item?    @relation(fields: [itemId], references: [id], onDelete: SetNull)
+
+  itemName  String
+  sku       String?
+
+  platform  SellingPlatform @default(OTHER)
+  currency  Currency        @default(GBP)
+
+  soldAt          DateTime
+  quantitySold    Int
+
+  salePricePerUnitPence Int
+  feesPence             Int @default(0)
+  netPence              Int @default(0)
+
+  costPerUnitPence  Int @default(0)
+  costTotalPence    Int @default(0)
+
+  notes     String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([userId, soldAt])
+  @@index([userId, itemId])
 }
