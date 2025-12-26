@@ -1,4 +1,4 @@
-// FILE: app/program/inventory/page.js
+// app/program/inventory/page.js
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
@@ -180,6 +180,8 @@ function compute(it) {
         purchaseTotal,
         listingPricePerUnit,
         listingPriceTotal,
+        profitBestPerUnit,
+        profitWorstPerUnit,
         profitBestTotal,
         profitWorstTotal,
     }
@@ -296,6 +298,19 @@ const DEFAULT_COLUMNS = {
     status: true,
     listings: false, // show ALL listing links (chips) in the table
     listingPrice: true,
+
+    // reseller finance / performance columns
+    purchasePerUnit: false,
+    expectedBest: false,
+    expectedWorst: false,
+    bestProfit: true,
+    worstProfit: true,
+    bestProfitPerUnit: false,
+    worstProfitPerUnit: false,
+    roiBest: false,
+    roiWorst: false,
+    ageDays: false,
+    updated: false,
 }
 
 const COLUMN_DEFS = [
@@ -304,9 +319,20 @@ const COLUMN_DEFS = [
     { key: "condition", label: "Condition", width: "160px" },
     { key: "quantity", label: "Qty", width: "80px" },
     { key: "purchase", label: "Purchase total", width: "190px" },
+    { key: "purchasePerUnit", label: "Purchase / unit", width: "170px" },
     { key: "status", label: "Status", width: "130px" },
     { key: "listings", label: "Listings", width: "420px" },
     { key: "listingPrice", label: "Listing price", width: "170px" },
+    { key: "expectedBest", label: "Expected best total", width: "210px" },
+    { key: "expectedWorst", label: "Expected worst total", width: "210px" },
+    { key: "bestProfit", label: "Best profit", width: "170px" },
+    { key: "worstProfit", label: "Worst profit", width: "170px" },
+    { key: "bestProfitPerUnit", label: "Best profit / unit", width: "190px" },
+    { key: "worstProfitPerUnit", label: "Worst profit / unit", width: "190px" },
+    { key: "roiBest", label: "ROI best", width: "140px" },
+    { key: "roiWorst", label: "ROI worst", width: "140px" },
+    { key: "ageDays", label: "Age (days)", width: "120px" },
+    { key: "updated", label: "Updated", width: "190px" },
 ]
 
 export default function InventoryPage() {
@@ -351,6 +377,34 @@ export default function InventoryPage() {
     const [addTab, setAddTab] = useState("BASIC")
 
     const [addForm, setAddForm] = useState(() => ({
+        title: "",
+        sku: "",
+        quantity: 1,
+
+        category: "Clothes",
+        condition: "Good",
+        status: "UNLISTED",
+
+        // money (per unit)
+        purchaseTotal: "0.00",
+        expectedBest: "0.00",
+        expectedWorst: "0.00",
+
+        // listing (multi)
+        listingPlatform: "EBAY",
+        listingUrl: "",
+        listingPrice: "0.00",
+        listings: [],
+
+        notes: "",
+    }))
+
+    // EDIT MODAL
+    const [editOpen, setEditOpen] = useState(false)
+    const [editSaving, setEditSaving] = useState(false)
+    const [editTab, setEditTab] = useState("BASIC")
+    const [editItem, setEditItem] = useState(null)
+    const [editForm, setEditForm] = useState(() => ({
         title: "",
         sku: "",
         quantity: 1,
@@ -464,6 +518,10 @@ export default function InventoryPage() {
             await loadItems()
             setDetailOpen(false)
             setDetailItem(null)
+            if (editOpen && editItem?.id === id) {
+                setEditOpen(false)
+                setEditItem(null)
+            }
         } catch (e) {
             showToast("error", e?.message || "Delete failed")
         }
@@ -604,6 +662,131 @@ export default function InventoryPage() {
         }
     }
 
+    const openEdit = (it) => {
+        const decoded = decodeNotes(it.notes)
+        const meta = normaliseMeta(decoded.meta)
+
+        setEditItem(it)
+        setEditTab("BASIC")
+
+        setEditForm({
+            title: it.name || "",
+            sku: it.sku || "",
+            quantity: Number(it.quantity) || 0,
+
+            category: meta.category || "Clothes",
+            condition: meta.condition || "Good",
+            status: (meta.status || "UNLISTED").toUpperCase(),
+
+            purchaseTotal: ((Number(meta.purchaseTotalPence || it.costPence || 0) || 0) / 100).toFixed(2),
+            expectedBest: meta.expectedBestPence == null ? "0.00" : ((Number(meta.expectedBestPence) || 0) / 100).toFixed(2),
+            expectedWorst: meta.expectedWorstPence == null ? "0.00" : ((Number(meta.expectedWorstPence) || 0) / 100).toFixed(2),
+
+            listingPlatform: "EBAY",
+            listingUrl: "",
+            listingPrice: "0.00",
+            listings: Array.isArray(meta.listings) ? meta.listings.map((l) => ({ ...l })) : [],
+
+            notes: decoded.notes || "",
+        })
+
+        setEditOpen(true)
+    }
+
+    const onEditChange = (patch) => setEditForm((p) => ({ ...p, ...patch }))
+
+    const editStatus = String(editForm.status || "UNLISTED").toUpperCase()
+    const showListingFieldsInEdit = editStatus === "LISTED" || editStatus === "SOLD"
+
+    useEffect(() => {
+        if (!showListingFieldsInEdit && editTab === "LISTING") setEditTab("BASIC")
+    }, [showListingFieldsInEdit, editTab])
+
+    const addListingToEditForm = () => {
+        const url = safeStr(editForm.listingUrl)
+        if (!url) return showToast("error", "Listing link is required")
+        const platform = (editForm.listingPlatform || "OTHER").toUpperCase()
+        const pricePence = parseMoneyToPence(editForm.listingPrice)
+        const listing = { platform, url, pricePence }
+
+        onEditChange({
+            listingUrl: "",
+            listingPrice: "0.00",
+            listings: Array.isArray(editForm.listings) ? [...editForm.listings, listing] : [listing],
+        })
+    }
+
+    const removeListingFromEditForm = (idx) => {
+        const arr = Array.isArray(editForm.listings) ? [...editForm.listings] : []
+        arr.splice(idx, 1)
+        onEditChange({ listings: arr })
+    }
+
+    const submitEdit = async (e) => {
+        e?.preventDefault?.()
+        if (!editItem?.id) return showToast("error", "No item selected")
+
+        const name = String(editForm.title || "").trim()
+        if (!name) return showToast("error", "Title is required")
+
+        const status = (editForm.status || "UNLISTED").toUpperCase()
+
+        const purchaseTotalPence = parseMoneyToPence(editForm.purchaseTotal)
+        const expectedBestPence = parseMoneyToPence(editForm.expectedBest)
+        const expectedWorstPence = parseMoneyToPence(editForm.expectedWorst)
+
+        const listings =
+            showListingFieldsInEdit && Array.isArray(editForm.listings)
+                ? editForm.listings
+                    .map((x) => ({
+                        platform: (x?.platform || "OTHER").toUpperCase(),
+                        url: safeStr(x?.url) || "",
+                        pricePence: x?.pricePence == null ? null : Number(x.pricePence),
+                    }))
+                    .filter((x) => x.url || Number.isFinite(x.pricePence))
+                : []
+
+        const meta = {
+            currency: currencyView,
+            status,
+            category: editForm.category || null,
+            condition: editForm.condition || null,
+
+            purchaseTotalPence,
+            expectedBestPence,
+            expectedWorstPence,
+
+            listings,
+        }
+
+        const payload = {
+            name,
+            sku: safeStr(editForm.sku) || null,
+            quantity: safeInt(editForm.quantity, 0),
+            costPence: purchaseTotalPence,
+            notes: encodeNotes(editForm.notes, meta),
+        }
+
+        setEditSaving(true)
+        try {
+            const res = await fetch(`/api/items/${editItem.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            })
+            const data = await res.json().catch(() => null)
+            if (!res.ok) throw new Error(data?.error || `Update failed (${res.status})`)
+            showToast("ok", "Updated")
+            setEditOpen(false)
+            setEditItem(null)
+            await loadItems()
+        } catch (e2) {
+            showToast("error", e2?.message || "Update failed")
+        } finally {
+            setEditSaving(false)
+        }
+    }
+
     const columnKeys = useMemo(() => {
         const keys = []
         for (const def of COLUMN_DEFS) {
@@ -615,7 +798,7 @@ export default function InventoryPage() {
     const gridCols = useMemo(() => {
         const base = ["44px", "minmax(260px, 1fr)"] // checkbox + title
         const dynamic = columnKeys.map((k) => COLUMN_DEFS.find((d) => d.key === k)?.width || "160px")
-        const actions = ["130px"]
+        const actions = ["190px"]
         return [...base, ...dynamic, ...actions].join(" ")
     }, [columnKeys])
 
@@ -651,6 +834,73 @@ export default function InventoryPage() {
                 <span className="text-[11px] text-zinc-400">{fmt(currencyView, perUnit)} / unit</span>
             </div>
         )
+    }
+
+    const renderPurchasePerUnit = (it) => {
+        const c = compute(it)
+        const perUnit = convertMinor(c.purchaseTotalPerUnit, c.itemCur, currencyView, fx.rates).value
+        return <span className="text-sm text-white">{fmt(currencyView, perUnit)}</span>
+    }
+
+    const renderExpectedTotal = (it, which) => {
+        const c = compute(it)
+        const perUnit = which === "BEST" ? c.meta.expectedBestPence : c.meta.expectedWorstPence
+        if (perUnit == null) return <span className="text-zinc-400">—</span>
+        const total = convertMinor(perUnit * c.q, c.itemCur, currencyView, fx.rates).value
+        return <span className="text-sm text-white">{fmt(currencyView, total)}</span>
+    }
+
+    const renderProfitTotal = (it, which) => {
+        const c = compute(it)
+        const p = which === "BEST" ? c.profitBestTotal : c.profitWorstTotal
+        if (p == null) return <span className="text-zinc-400">—</span>
+        const v = convertMinor(p, c.itemCur, currencyView, fx.rates).value
+        return (
+            <span className={v >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>
+                {fmt(currencyView, v)}
+            </span>
+        )
+    }
+
+    const renderProfitPerUnit = (it, which) => {
+        const c = compute(it)
+        const p = which === "BEST" ? c.profitBestPerUnit : c.profitWorstPerUnit
+        if (p == null) return <span className="text-zinc-400">—</span>
+        const v = convertMinor(p, c.itemCur, currencyView, fx.rates).value
+        return (
+            <span className={v >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>
+                {fmt(currencyView, v)}
+            </span>
+        )
+    }
+
+    const renderROI = (it, which) => {
+        const c = compute(it)
+        const perUnit = c.purchaseTotalPerUnit || 0
+        const profitPerUnit = which === "BEST" ? c.profitBestPerUnit : c.profitWorstPerUnit
+        if (profitPerUnit == null || perUnit <= 0) return <span className="text-zinc-400">—</span>
+        const roi = (profitPerUnit / perUnit) * 100
+        const val = Number.isFinite(roi) ? roi : null
+        if (val == null) return <span className="text-zinc-400">—</span>
+        return (
+            <span className={val >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>
+                {val.toFixed(1)}%
+            </span>
+        )
+    }
+
+    const renderAgeDays = (it) => {
+        const created = it.createdAt ? new Date(it.createdAt).getTime() : null
+        if (!created || !Number.isFinite(created)) return <span className="text-zinc-400">—</span>
+        const days = Math.max(0, Math.floor((Date.now() - created) / (1000 * 60 * 60 * 24)))
+        return <span className="text-sm text-white">{days}</span>
+    }
+
+    const renderUpdated = (it) => {
+        if (!it.updatedAt) return <span className="text-zinc-400">—</span>
+        const d = new Date(it.updatedAt)
+        if (Number.isNaN(d.getTime())) return <span className="text-zinc-400">—</span>
+        return <span className="text-sm text-white">{d.toLocaleString()}</span>
     }
 
     const renderListingsChips = (it) => {
@@ -816,9 +1066,25 @@ export default function InventoryPage() {
                                     {columns.condition ? <div className="px-4 py-3">Condition</div> : null}
                                     {columns.quantity ? <div className="px-4 py-3">Qty</div> : null}
                                     {columns.purchase ? <div className="px-4 py-3">Purchase total</div> : null}
+                                    {columns.purchasePerUnit ? <div className="px-4 py-3">Purchase / unit</div> : null}
                                     {columns.status ? <div className="px-4 py-3">Status</div> : null}
                                     {columns.listings ? <div className="px-4 py-3">Listings</div> : null}
                                     {columns.listingPrice ? <div className="px-4 py-3">Listing price</div> : null}
+
+                                    {columns.expectedBest ? <div className="px-4 py-3">Expected best total</div> : null}
+                                    {columns.expectedWorst ? <div className="px-4 py-3">Expected worst total</div> : null}
+
+                                    {columns.bestProfit ? <div className="px-4 py-3">Best profit</div> : null}
+                                    {columns.worstProfit ? <div className="px-4 py-3">Worst profit</div> : null}
+
+                                    {columns.bestProfitPerUnit ? <div className="px-4 py-3">Best profit / unit</div> : null}
+                                    {columns.worstProfitPerUnit ? <div className="px-4 py-3">Worst profit / unit</div> : null}
+
+                                    {columns.roiBest ? <div className="px-4 py-3">ROI best</div> : null}
+                                    {columns.roiWorst ? <div className="px-4 py-3">ROI worst</div> : null}
+
+                                    {columns.ageDays ? <div className="px-4 py-3">Age (days)</div> : null}
+                                    {columns.updated ? <div className="px-4 py-3">Updated</div> : null}
 
                                     <div className="px-4 py-3 text-right">Actions</div>
                                 </div>
@@ -864,6 +1130,7 @@ export default function InventoryPage() {
                                                 {columns.condition ? <div className="px-4 py-3 text-sm text-zinc-200">{c.meta.condition ?? "—"}</div> : null}
                                                 {columns.quantity ? <div className="px-4 py-3 text-sm text-zinc-200">{c.q}</div> : null}
                                                 {columns.purchase ? <div className="px-4 py-3 text-sm text-zinc-200">{renderPurchaseTotal(it)}</div> : null}
+                                                {columns.purchasePerUnit ? <div className="px-4 py-3 text-sm text-zinc-200">{renderPurchasePerUnit(it)}</div> : null}
                                                 {columns.status ? (
                                                     <div className="px-4 py-3 text-sm text-zinc-200">
                                                         <Pill text={c.status} />
@@ -872,14 +1139,38 @@ export default function InventoryPage() {
                                                 {columns.listings ? <div className="px-4 py-3 text-sm text-zinc-200">{renderListingsChips(it)}</div> : null}
                                                 {columns.listingPrice ? <div className="px-4 py-3 text-sm text-zinc-200">{renderListingPrice(it)}</div> : null}
 
+                                                {columns.expectedBest ? <div className="px-4 py-3 text-sm text-zinc-200">{renderExpectedTotal(it, "BEST")}</div> : null}
+                                                {columns.expectedWorst ? <div className="px-4 py-3 text-sm text-zinc-200">{renderExpectedTotal(it, "WORST")}</div> : null}
+
+                                                {columns.bestProfit ? <div className="px-4 py-3 text-sm text-zinc-200">{renderProfitTotal(it, "BEST")}</div> : null}
+                                                {columns.worstProfit ? <div className="px-4 py-3 text-sm text-zinc-200">{renderProfitTotal(it, "WORST")}</div> : null}
+
+                                                {columns.bestProfitPerUnit ? <div className="px-4 py-3 text-sm text-zinc-200">{renderProfitPerUnit(it, "BEST")}</div> : null}
+                                                {columns.worstProfitPerUnit ? <div className="px-4 py-3 text-sm text-zinc-200">{renderProfitPerUnit(it, "WORST")}</div> : null}
+
+                                                {columns.roiBest ? <div className="px-4 py-3 text-sm text-zinc-200">{renderROI(it, "BEST")}</div> : null}
+                                                {columns.roiWorst ? <div className="px-4 py-3 text-sm text-zinc-200">{renderROI(it, "WORST")}</div> : null}
+
+                                                {columns.ageDays ? <div className="px-4 py-3 text-sm text-zinc-200">{renderAgeDays(it)}</div> : null}
+                                                {columns.updated ? <div className="px-4 py-3 text-sm text-zinc-200">{renderUpdated(it)}</div> : null}
+
                                                 <div className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => singleDelete(it.id)}
-                                                        className="rounded-2xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/15"
-                                                    >
-                                                        Delete
-                                                    </button>
+                                                    <div className="flex items-center justify-end gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => openEdit(it)}
+                                                            className="rounded-2xl border border-white/10 bg-white/10 px-3 py-2 text-xs font-semibold text-white hover:bg-white/15"
+                                                        >
+                                                            Edit
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => singleDelete(it.id)}
+                                                            className="rounded-2xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/15"
+                                                        >
+                                                            Delete
+                                                        </button>
+                                                    </div>
                                                 </div>
                                             </div>
                                         )
@@ -1244,6 +1535,303 @@ export default function InventoryPage() {
                 </Modal>
             ) : null}
 
+            {/* EDIT MODAL */}
+            {editOpen ? (
+                <Modal
+                    title="Edit item"
+                    onClose={() => {
+                        setEditOpen(false)
+                        setEditItem(null)
+                    }}
+                    maxWidth="max-w-4xl"
+                    footer={
+                        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setEditOpen(false)
+                                    setEditItem(null)
+                                }}
+                                className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                form="rt-edit-item"
+                                disabled={editSaving}
+                                className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100 disabled:opacity-60"
+                            >
+                                {editSaving ? "Saving…" : "Save changes"}
+                            </button>
+                        </div>
+                    }
+                >
+                    <div className="mb-4">
+                        <SectionTabs
+                            value={editTab}
+                            onChange={setEditTab}
+                            tabs={[
+                                { value: "BASIC", label: "Basic" },
+                                { value: "FINANCE", label: "Finance" },
+                                ...(showListingFieldsInEdit ? [{ value: "LISTING", label: "Listing" }] : []),
+                            ]}
+                        />
+                    </div>
+
+                    <form id="rt-edit-item" onSubmit={submitEdit} className="space-y-4">
+                        {editTab === "BASIC" ? (
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <Field label="Title *">
+                                    <input
+                                        value={editForm.title}
+                                        onChange={(e) => onEditChange({ title: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                        placeholder="e.g. Nike Air Max 95"
+                                        autoFocus
+                                    />
+                                </Field>
+
+                                <Field label="SKU (optional)">
+                                    <input
+                                        value={editForm.sku}
+                                        onChange={(e) => onEditChange({ sku: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                        placeholder="e.g. AM95-001"
+                                    />
+                                </Field>
+
+                                <Field label="Quantity (units)">
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        value={editForm.quantity}
+                                        onChange={(e) => onEditChange({ quantity: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    />
+                                </Field>
+
+                                <Field label="Status">
+                                    <select
+                                        value={editForm.status}
+                                        onChange={(e) => onEditChange({ status: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    >
+                                        {STATUSES.map(([v, l]) => (
+                                            <option key={v} value={v}>
+                                                {l}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </Field>
+
+                                <Field label="Category">
+                                    <select
+                                        value={editForm.category}
+                                        onChange={(e) => onEditChange({ category: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    >
+                                        {CATEGORIES.map((c) => (
+                                            <option key={c} value={c}>
+                                                {c}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </Field>
+
+                                <Field label="Condition">
+                                    <select
+                                        value={editForm.condition}
+                                        onChange={(e) => onEditChange({ condition: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    >
+                                        {CONDITIONS.map((c) => (
+                                            <option key={c} value={c}>
+                                                {c}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </Field>
+
+                                <Field label="Notes" className="md:col-span-2">
+                                    <textarea
+                                        value={editForm.notes}
+                                        onChange={(e) => onEditChange({ notes: e.target.value })}
+                                        className="min-h-[110px] w-full resize-none rounded-2xl border border-white/10 bg-zinc-950/60 px-4 py-3 text-sm text-white outline-none focus:border-white/20"
+                                        placeholder="Anything useful…"
+                                    />
+                                </Field>
+                            </div>
+                        ) : null}
+
+                        {editTab === "FINANCE" ? (
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <Card title={`Finance (${currencyView})`}>
+                                    <div className="grid gap-4 md:grid-cols-2">
+                                        <Field label="Total purchase price (all-in) per unit">
+                                            <input
+                                                inputMode="decimal"
+                                                value={editForm.purchaseTotal}
+                                                onChange={(e) => onEditChange({ purchaseTotal: e.target.value })}
+                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                                placeholder="0.00"
+                                            />
+                                        </Field>
+
+                                        <Field label="Expected best sale per unit">
+                                            <input
+                                                inputMode="decimal"
+                                                value={editForm.expectedBest}
+                                                onChange={(e) => onEditChange({ expectedBest: e.target.value })}
+                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                                placeholder="0.00"
+                                            />
+                                        </Field>
+
+                                        <Field label="Expected worst sale per unit" className="md:col-span-2">
+                                            <input
+                                                inputMode="decimal"
+                                                value={editForm.expectedWorst}
+                                                onChange={(e) => onEditChange({ expectedWorst: e.target.value })}
+                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                                placeholder="0.00"
+                                            />
+                                        </Field>
+                                    </div>
+
+                                    <div className="mt-4 rounded-2xl border border-white/10 bg-zinc-950/30 p-4">
+                                        <div className="text-xs font-semibold text-zinc-300">Quick snapshot</div>
+                                        <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                                            <Snapshot label="Total cost" value={fmt(currencyView, parseMoneyToPence(editForm.purchaseTotal) * safeInt(editForm.quantity, 0))} />
+                                            <Snapshot
+                                                label="Best profit"
+                                                value={fmt(
+                                                    currencyView,
+                                                    (parseMoneyToPence(editForm.expectedBest) - parseMoneyToPence(editForm.purchaseTotal)) * safeInt(editForm.quantity, 0)
+                                                )}
+                                                good
+                                            />
+                                            <Snapshot
+                                                label="Worst profit"
+                                                value={fmt(
+                                                    currencyView,
+                                                    (parseMoneyToPence(editForm.expectedWorst) - parseMoneyToPence(editForm.purchaseTotal)) * safeInt(editForm.quantity, 0)
+                                                )}
+                                            />
+                                        </div>
+                                        <div className="mt-2 text-[11px] text-zinc-400">Fees and sold breakdown can come later.</div>
+                                    </div>
+                                </Card>
+
+                                <Card title="Finance notes">
+                                    <ul className="space-y-2 text-sm text-zinc-300">
+                                        <li>• Purchase is all-in per unit (what it actually cost you).</li>
+                                        <li>• Expected best and worst are your range per unit.</li>
+                                        <li>• Display currency is global; values convert using FX.</li>
+                                    </ul>
+                                </Card>
+                            </div>
+                        ) : null}
+
+                        {editTab === "LISTING" && showListingFieldsInEdit ? (
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <Card title="Edit listing link(s)">
+                                    <div className="grid gap-4 md:grid-cols-2">
+                                        <Field label="Platform">
+                                            <select
+                                                value={editForm.listingPlatform}
+                                                onChange={(e) => onEditChange({ listingPlatform: e.target.value })}
+                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                            >
+                                                {PLATFORMS.filter(([v]) => v !== "NONE").map(([v, l]) => (
+                                                    <option key={v} value={v}>
+                                                        {l}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </Field>
+
+                                        <Field label="Listing link (URL)">
+                                            <input
+                                                value={editForm.listingUrl}
+                                                onChange={(e) => onEditChange({ listingUrl: e.target.value })}
+                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                                placeholder="https://…"
+                                            />
+                                        </Field>
+
+                                        <Field label="Listing price per unit (optional)">
+                                            <input
+                                                inputMode="decimal"
+                                                value={editForm.listingPrice}
+                                                onChange={(e) => onEditChange({ listingPrice: e.target.value })}
+                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                                placeholder="0.00"
+                                            />
+                                        </Field>
+
+                                        <div className="flex items-end">
+                                            <button
+                                                type="button"
+                                                onClick={addListingToEditForm}
+                                                className="h-11 w-full rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white hover:bg-white/15"
+                                            >
+                                                Add link
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-4 space-y-2">
+                                        {(Array.isArray(editForm.listings) ? editForm.listings : []).length === 0 ? (
+                                            <div className="text-sm text-zinc-300">No links added yet.</div>
+                                        ) : (
+                                            (editForm.listings || []).map((l, idx) => {
+                                                const href = linkify(l.url)
+                                                return (
+                                                    <div
+                                                        key={`${l.platform}-${idx}`}
+                                                        className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-zinc-950/30 p-3 sm:flex-row sm:items-center sm:justify-between"
+                                                    >
+                                                        <div className="min-w-0">
+                                                            <div className="text-sm font-semibold text-white">{l.platform}</div>
+                                                            <a
+                                                                href={href}
+                                                                target="_blank"
+                                                                rel="noreferrer"
+                                                                className="block truncate text-xs text-zinc-300 underline underline-offset-2 hover:text-white"
+                                                            >
+                                                                {href}
+                                                            </a>
+                                                            <div className="mt-1 text-xs text-zinc-400">
+                                                                Price: {l.pricePence == null ? "—" : fmt(currencyView, l.pricePence)}
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => removeListingFromEditForm(idx)}
+                                                            className="h-10 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 text-sm font-semibold text-red-100 hover:bg-red-500/15"
+                                                        >
+                                                            Remove
+                                                        </button>
+                                                    </div>
+                                                )
+                                            })
+                                        )}
+                                    </div>
+                                </Card>
+
+                                <Card title="Tip">
+                                    <div className="text-sm text-zinc-300">
+                                        You can add multiple listing links across platforms. Enable the <span className="font-semibold text-white">Listings</span>{" "}
+                                        column to show them in the table.
+                                    </div>
+                                </Card>
+                            </div>
+                        ) : null}
+                    </form>
+                </Modal>
+            ) : null}
+
             {/* DETAIL MODAL */}
             {detailOpen && detailItem ? (
                 <Modal
@@ -1265,7 +1853,7 @@ export default function InventoryPage() {
 
                             <button
                                 type="button"
-                                onClick={() => showToast("error", "Edit (PATCH) next.")}
+                                onClick={() => openEdit(detailItem)}
                                 className="h-11 rounded-2xl border border-white/10 bg-white/10 px-5 text-sm font-semibold text-white hover:bg-white/15"
                             >
                                 Edit
