@@ -371,6 +371,19 @@ export default function InventoryPage() {
         error: null,
     })
 
+    // SEARCH (works like original: free text, NOT status)
+    const [search, setSearch] = useState("")
+
+    // FILTERS
+    const [filtersOpen, setFiltersOpen] = useState(false)
+    const [filters, setFilters] = useState(() => ({
+        status: "ALL", // ALL | UNLISTED | LISTED | SOLD
+        category: "ALL", // ALL | category
+        condition: "ALL", // ALL | condition
+        platform: "ALL", // ALL | platform
+        onlyWithLinks: false,
+    }))
+
     // ADD MODAL
     const [addOpen, setAddOpen] = useState(false)
     const [addSaving, setAddSaving] = useState(false)
@@ -496,7 +509,6 @@ export default function InventoryPage() {
         })
     }
 
-    const selectAll = () => setSelected(new Set(items.map((x) => x.id)))
     const clearSelection = () => setSelected(new Set())
 
     const openDetail = (it) => {
@@ -802,15 +814,84 @@ export default function InventoryPage() {
         return [...base, ...dynamic, ...actions].join(" ")
     }, [columnKeys])
 
+    const filteredItems = useMemo(() => {
+        const q = String(search || "").trim().toLowerCase()
+
+        const statusF = String(filters.status || "ALL").toUpperCase()
+        const categoryF = String(filters.category || "ALL")
+        const conditionF = String(filters.condition || "ALL")
+        const platformF = String(filters.platform || "ALL").toUpperCase()
+        const onlyLinks = !!filters.onlyWithLinks
+
+        const statusLabelMap = Object.fromEntries(
+            STATUSES.map(([value, label]) => [String(value).toUpperCase(), String(label)])
+        )
+
+        return items.filter((it) => {
+            const c = compute(it)
+
+            // filters
+            if (statusF !== "ALL" && c.status !== statusF) return false
+            if (categoryF !== "ALL" && (c.meta.category || "—") !== categoryF) return false
+            if (conditionF !== "ALL" && (c.meta.condition || "—") !== conditionF) return false
+
+            if (platformF !== "ALL") {
+                const hasPlatform = (c.meta.listings || []).some(
+                    (l) => String(l.platform || "").toUpperCase() === platformF
+                )
+                if (!hasPlatform) return false
+            }
+
+            if (onlyLinks) {
+                const hasAnyLinks = (c.meta.listings || []).some((l) => safeStr(l.url))
+                if (!hasAnyLinks) return false
+            }
+
+            // search (NOW includes status + platforms + listing urls)
+            if (!q) return true
+
+            const sku = String(it.sku ?? "").toLowerCase()
+            const name = String(it.name ?? "").toLowerCase()
+            const cat = String(c.meta.category ?? "").toLowerCase()
+            const cond = String(c.meta.condition ?? "").toLowerCase()
+            const notes = String(c.notesPlain ?? "").toLowerCase()
+
+            const statusCode = String(c.status ?? "").toLowerCase() // "listed"
+            const statusLabel = String(statusLabelMap[String(c.status ?? "").toUpperCase()] || "").toLowerCase() // "listed" / "unlisted" / "sold"
+
+            const listingPlatforms = (c.meta.listings || [])
+                .map((l) => String(l.platform || ""))
+                .join(" ")
+                .toLowerCase()
+
+            const listingUrls = (c.meta.listings || [])
+                .map((l) => String(l.url || ""))
+                .join(" ")
+                .toLowerCase()
+
+            return (
+                name.includes(q) ||
+                sku.includes(q) ||
+                cat.includes(q) ||
+                cond.includes(q) ||
+                notes.includes(q) ||
+                statusCode.includes(q) ||
+                statusLabel.includes(q) ||
+                listingPlatforms.includes(q) ||
+                listingUrls.includes(q)
+            )
+        })
+    }, [items, search, filters])
+
     const totals = useMemo(() => {
-        const rowCount = items.length
-        const unitCount = items.reduce((a, it) => a + (Number(it.quantity) || 0), 0)
+        const rowCount = filteredItems.length
+        const unitCount = filteredItems.reduce((a, it) => a + (Number(it.quantity) || 0), 0)
 
         let invested = 0
         let best = 0
         let worst = 0
 
-        for (const it of items) {
+        for (const it of filteredItems) {
             const c = compute(it)
             const toView = (minor) => convertMinor(minor, c.itemCur, currencyView, fx.rates).value
 
@@ -821,7 +902,7 @@ export default function InventoryPage() {
         }
 
         return { rowCount, unitCount, invested, best, worst }
-    }, [items, currencyView, fx.rates])
+    }, [filteredItems, currencyView, fx.rates])
 
     const renderPurchaseTotal = (it) => {
         const c = compute(it)
@@ -939,6 +1020,40 @@ export default function InventoryPage() {
         return <span className="text-sm text-white">{fmt(currencyView, v)}</span>
     }
 
+    const toggleSelectAllVisible = () => {
+        const visibleIds = filteredItems.map((x) => x.id)
+        const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id))
+        setSelected((prev) => {
+            const next = new Set(prev)
+            if (allSelected) {
+                visibleIds.forEach((id) => next.delete(id))
+            } else {
+                visibleIds.forEach((id) => next.add(id))
+            }
+            return next
+        })
+    }
+
+    const resetFilters = () => {
+        setFilters({
+            status: "ALL",
+            category: "ALL",
+            condition: "ALL",
+            platform: "ALL",
+            onlyWithLinks: false,
+        })
+    }
+
+    const filtersCount = useMemo(() => {
+        let n = 0
+        if ((filters.status || "ALL") !== "ALL") n++
+        if ((filters.category || "ALL") !== "ALL") n++
+        if ((filters.condition || "ALL") !== "ALL") n++
+        if ((filters.platform || "ALL") !== "ALL") n++
+        if (!!filters.onlyWithLinks) n++
+        return n
+    }, [filters])
+
     return (
         <div className="min-h-[calc(100vh-64px)] bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 text-zinc-50">
             <div className="mx-auto w-full max-w-[1400px] px-4 py-8">
@@ -950,7 +1065,7 @@ export default function InventoryPage() {
                         </p>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                         <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
                             <div className="text-xs font-semibold text-zinc-300">Display</div>
                             <select
@@ -974,6 +1089,33 @@ export default function InventoryPage() {
                                 {fx.loading ? "FX…" : "FX"}
                             </button>
                         </div>
+
+                        {/* SEARCH BAR */}
+                        <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+                            <input
+                                value={search}
+                                onChange={(e) => setSearch(e.target.value)}
+                                className="h-9 w-[260px] rounded-xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none focus:border-white/20"
+                                placeholder="Search title, SKU, category, condition, notes…"
+                            />
+                            {search ? (
+                                <button
+                                    type="button"
+                                    onClick={() => setSearch("")}
+                                    className="h-9 rounded-xl border border-white/10 bg-white/10 px-3 text-xs font-semibold text-white/90 hover:bg-white/15"
+                                >
+                                    Clear
+                                </button>
+                            ) : null}
+                        </div>
+
+                        <button
+                            type="button"
+                            onClick={() => setFiltersOpen(true)}
+                            className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15"
+                        >
+                            Filters{filtersCount ? ` (${filtersCount})` : ""}
+                        </button>
 
                         <button
                             type="button"
@@ -1017,9 +1159,9 @@ export default function InventoryPage() {
                 ) : null}
 
                 <div className="mb-6 grid gap-4 md:grid-cols-5">
-                    <StatCard label="Items (rows)" value={totals.rowCount} sub="Unique records" />
-                    <StatCard label="Quantity (units)" value={totals.unitCount} sub="Sum of all quantities" />
-                    <StatCard label={`Invested (${currencyView})`} value={fmt(currencyView, totals.invested)} sub="Total purchase cost" />
+                    <StatCard label="Items (rows)" value={totals.rowCount} sub="Visible records" />
+                    <StatCard label="Quantity (units)" value={totals.unitCount} sub="Sum of visible quantities" />
+                    <StatCard label={`Invested (${currencyView})`} value={fmt(currencyView, totals.invested)} sub="Visible purchase cost" />
                     <StatCard label={`Best profit (${currencyView})`} value={fmt(currencyView, totals.best)} sub="Expected best sale - cost" />
                     <StatCard label={`Worst profit (${currencyView})`} value={fmt(currencyView, totals.worst)} sub="Expected worst sale - cost" />
                 </div>
@@ -1029,17 +1171,21 @@ export default function InventoryPage() {
                         <div>
                             <div className="text-sm font-semibold text-white">Your items</div>
                             <div className="text-xs text-zinc-300">
-                                {loading ? "Loading…" : `${items.length} row(s)`} • click a row for details
+                                {loading ? "Loading…" : `${filteredItems.length} row(s)`} • click a row for details
                             </div>
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2">
                             <button
                                 type="button"
-                                onClick={() => (items.length && selected.size === items.length ? clearSelection() : selectAll())}
+                                onClick={toggleSelectAllVisible}
                                 className="h-10 rounded-2xl border border-white/10 bg-transparent px-4 text-sm font-semibold text-white/90 transition hover:bg-white/5"
                             >
-                                {items.length && selected.size === items.length ? "Clear all" : "Select all"}
+                                {(() => {
+                                    const visibleIds = filteredItems.map((x) => x.id)
+                                    const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id))
+                                    return allSelected ? "Clear visible" : "Select visible"
+                                })()}
                             </button>
 
                             <button
@@ -1089,12 +1235,12 @@ export default function InventoryPage() {
                                     <div className="px-4 py-3 text-right">Actions</div>
                                 </div>
 
-                                {!loading && items.length === 0 ? (
-                                    <div className="px-4 py-6 text-sm text-zinc-300">No items yet. Click “Add item”.</div>
+                                {!loading && filteredItems.length === 0 ? (
+                                    <div className="px-4 py-6 text-sm text-zinc-300">No items match your filters / search.</div>
                                 ) : null}
 
                                 <div className="divide-y divide-white/10">
-                                    {items.map((it, idx) => {
+                                    {filteredItems.map((it, idx) => {
                                         const c = compute(it)
                                         return (
                                             <div
@@ -1197,6 +1343,105 @@ export default function InventoryPage() {
                 </div>
             </div>
 
+            {/* FILTERS MODAL */}
+            {filtersOpen ? (
+                <Modal
+                    title="Filters"
+                    onClose={() => setFiltersOpen(false)}
+                    maxWidth="max-w-2xl"
+                    footer={
+                        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+                            <button
+                                type="button"
+                                onClick={resetFilters}
+                                className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
+                            >
+                                Reset
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setFiltersOpen(false)}
+                                className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100"
+                            >
+                                Done
+                            </button>
+                        </div>
+                    }
+                >
+                    <div className="grid gap-4 sm:grid-cols-2">
+                        <Field label="Status">
+                            <select
+                                value={filters.status}
+                                onChange={(e) => setFilters((p) => ({ ...p, status: e.target.value }))}
+                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                            >
+                                <option value="ALL">All</option>
+                                {STATUSES.map(([v, l]) => (
+                                    <option key={v} value={v}>
+                                        {l}
+                                    </option>
+                                ))}
+                            </select>
+                        </Field>
+
+                        <Field label="Category">
+                            <select
+                                value={filters.category}
+                                onChange={(e) => setFilters((p) => ({ ...p, category: e.target.value }))}
+                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                            >
+                                <option value="ALL">All</option>
+                                {CATEGORIES.map((c) => (
+                                    <option key={c} value={c}>
+                                        {c}
+                                    </option>
+                                ))}
+                            </select>
+                        </Field>
+
+                        <Field label="Condition">
+                            <select
+                                value={filters.condition}
+                                onChange={(e) => setFilters((p) => ({ ...p, condition: e.target.value }))}
+                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                            >
+                                <option value="ALL">All</option>
+                                {CONDITIONS.map((c) => (
+                                    <option key={c} value={c}>
+                                        {c}
+                                    </option>
+                                ))}
+                            </select>
+                        </Field>
+
+                        <Field label="Has platform listing">
+                            <select
+                                value={filters.platform}
+                                onChange={(e) => setFilters((p) => ({ ...p, platform: e.target.value }))}
+                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                            >
+                                <option value="ALL">All</option>
+                                {PLATFORMS.filter(([v]) => v !== "NONE").map(([v, l]) => (
+                                    <option key={v} value={v}>
+                                        {l}
+                                    </option>
+                                ))}
+                            </select>
+                        </Field>
+
+                        <label className="sm:col-span-2 flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 hover:bg-white/10">
+                            <div className="text-sm font-semibold text-white">Only items with links</div>
+                            <input
+                                type="checkbox"
+                                checked={!!filters.onlyWithLinks}
+                                onChange={(e) => setFilters((p) => ({ ...p, onlyWithLinks: e.target.checked }))}
+                                className="h-4 w-4 rounded border-white/20 bg-transparent accent-white"
+                            />
+                        </label>
+                    </div>
+                </Modal>
+            ) : null}
+
             {/* COLUMNS MODAL */}
             {columnsOpen ? (
                 <Modal
@@ -1245,6 +1490,7 @@ export default function InventoryPage() {
             ) : null}
 
             {/* ADD MODAL */}
+            {/* ADD MODAL */}
             {addOpen ? (
                 <Modal
                     title="Add item"
@@ -1270,147 +1516,159 @@ export default function InventoryPage() {
                         </div>
                     }
                 >
-                    <div className="mb-4">
-                        <SectionTabs
-                            value={addTab}
-                            onChange={setAddTab}
-                            tabs={[
-                                { value: "BASIC", label: "Basic" },
-                                { value: "FINANCE", label: "Finance" },
-                                ...(showListingFieldsInAdd ? [{ value: "LISTING", label: "Listing" }] : []),
-                            ]}
-                        />
-                    </div>
-
                     <form id="rt-add-item" onSubmit={submitAdd} className="space-y-4">
-                        {addTab === "BASIC" ? (
-                            <div className="grid gap-4 md:grid-cols-2">
-                                <Field label="Title *">
-                                    <input
-                                        value={addForm.title}
-                                        onChange={(e) => onAddChange({ title: e.target.value })}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                        placeholder="e.g. Nike Air Max 95"
-                                        autoFocus
-                                    />
-                                </Field>
+                        <div className="grid gap-4 md:grid-cols-2">
+                            <Field label="Title *" className="md:col-span-2">
+                                <input
+                                    value={addForm.title}
+                                    onChange={(e) => onAddChange({ title: e.target.value })}
+                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    placeholder="e.g. Nike Air Max 95"
+                                    autoFocus
+                                />
+                            </Field>
 
-                                <Field label="SKU (optional)">
-                                    <input
-                                        value={addForm.sku}
-                                        onChange={(e) => onAddChange({ sku: e.target.value })}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                        placeholder="e.g. AM95-001"
-                                    />
-                                </Field>
+                            <Field label="SKU *">
+                                <input
+                                    value={addForm.sku}
+                                    onChange={(e) => onAddChange({ sku: e.target.value })}
+                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    placeholder="e.g. AM95-001"
+                                />
+                            </Field>
 
-                                <Field label="Quantity (units)">
-                                    <input
-                                        type="number"
-                                        min={0}
-                                        value={addForm.quantity}
-                                        onChange={(e) => onAddChange({ quantity: e.target.value })}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                    />
-                                </Field>
+                            <Field label="Quantity (units)">
+                                <input
+                                    type="number"
+                                    min={0}
+                                    value={addForm.quantity}
+                                    onChange={(e) => onAddChange({ quantity: e.target.value })}
+                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                />
+                            </Field>
 
-                                <Field label="Status">
-                                    <select
-                                        value={addForm.status}
-                                        onChange={(e) => onAddChange({ status: e.target.value })}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                            <Field label="Category">
+                                <select
+                                    value={addForm.category}
+                                    onChange={(e) => onAddChange({ category: e.target.value })}
+                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                >
+                                    {CATEGORIES.map((c) => (
+                                        <option key={c} value={c}>
+                                            {c}
+                                        </option>
+                                    ))}
+                                </select>
+                            </Field>
+
+                            <Field label="Condition">
+                                <select
+                                    value={addForm.condition}
+                                    onChange={(e) => onAddChange({ condition: e.target.value })}
+                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                >
+                                    {CONDITIONS.map((c) => (
+                                        <option key={c} value={c}>
+                                            {c}
+                                        </option>
+                                    ))}
+                                </select>
+                            </Field>
+
+                            {/* STATUS TOGGLE */}
+                            <div className="md:col-span-2">
+                                <div className="mb-1.5 text-xs font-semibold text-zinc-300">Status</div>
+                                <div className="inline-flex rounded-2xl border border-white/10 bg-white/5 p-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => onAddChange({ status: "UNLISTED" })}
+                                        className={[
+                                            "h-10 rounded-2xl px-4 text-sm font-semibold transition",
+                                            addForm.status === "UNLISTED"
+                                                ? "bg-white text-zinc-950"
+                                                : "text-white/90 hover:bg-white/10",
+                                        ].join(" ")}
                                     >
-                                        {STATUSES.map(([v, l]) => (
-                                            <option key={v} value={v}>
-                                                {l}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </Field>
-
-                                <Field label="Category">
-                                    <select
-                                        value={addForm.category}
-                                        onChange={(e) => onAddChange({ category: e.target.value })}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                        Unlisted
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => onAddChange({ status: "LISTED" })}
+                                        className={[
+                                            "h-10 rounded-2xl px-4 text-sm font-semibold transition",
+                                            addForm.status === "LISTED"
+                                                ? "bg-white text-zinc-950"
+                                                : "text-white/90 hover:bg-white/10",
+                                        ].join(" ")}
                                     >
-                                        {CATEGORIES.map((c) => (
-                                            <option key={c} value={c}>
-                                                {c}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </Field>
-
-                                <Field label="Condition">
-                                    <select
-                                        value={addForm.condition}
-                                        onChange={(e) => onAddChange({ condition: e.target.value })}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                    >
-                                        {CONDITIONS.map((c) => (
-                                            <option key={c} value={c}>
-                                                {c}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </Field>
-
-                                <Field label="Notes" className="md:col-span-2">
-                                    <textarea
-                                        value={addForm.notes}
-                                        onChange={(e) => onAddChange({ notes: e.target.value })}
-                                        className="min-h-[110px] w-full resize-none rounded-2xl border border-white/10 bg-zinc-950/60 px-4 py-3 text-sm text-white outline-none focus:border-white/20"
-                                        placeholder="Anything useful…"
-                                    />
-                                </Field>
+                                        Listed
+                                    </button>
+                                </div>
                             </div>
-                        ) : null}
 
-                        {addTab === "FINANCE" ? (
-                            <div className="grid gap-4 md:grid-cols-2">
-                                <Card title={`Finance (${currencyView})`}>
-                                    <div className="grid gap-4 md:grid-cols-2">
-                                        <Field label="Total purchase price (all-in) per unit">
-                                            <input
-                                                inputMode="decimal"
-                                                value={addForm.purchaseTotal}
-                                                onChange={(e) => onAddChange({ purchaseTotal: e.target.value })}
-                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                                placeholder="0.00"
-                                            />
-                                        </Field>
+                            <Field label="Total purchase price (all-in) per unit">
+                                <input
+                                    inputMode="decimal"
+                                    value={addForm.purchaseTotal}
+                                    onChange={(e) => onAddChange({ purchaseTotal: e.target.value })}
+                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    placeholder="0.00"
+                                />
+                            </Field>
 
-                                        <Field label="Expected best sale per unit">
-                                            <input
-                                                inputMode="decimal"
-                                                value={addForm.expectedBest}
-                                                onChange={(e) => onAddChange({ expectedBest: e.target.value })}
-                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                                placeholder="0.00"
-                                            />
-                                        </Field>
+                            {/* UNLISTED: expected best/worst */}
+                            {addForm.status !== "LISTED" ? (
+                                <>
+                                    <Field label="Expected best sale per unit">
+                                        <input
+                                            inputMode="decimal"
+                                            value={addForm.expectedBest}
+                                            onChange={(e) => onAddChange({ expectedBest: e.target.value })}
+                                            className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                            placeholder="0.00"
+                                        />
+                                    </Field>
 
-                                        <Field label="Expected worst sale per unit" className="md:col-span-2">
-                                            <input
-                                                inputMode="decimal"
-                                                value={addForm.expectedWorst}
-                                                onChange={(e) => onAddChange({ expectedWorst: e.target.value })}
-                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                                placeholder="0.00"
-                                            />
-                                        </Field>
-                                    </div>
+                                    <Field label="Expected worst sale per unit">
+                                        <input
+                                            inputMode="decimal"
+                                            value={addForm.expectedWorst}
+                                            onChange={(e) => onAddChange({ expectedWorst: e.target.value })}
+                                            className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                            placeholder="0.00"
+                                        />
+                                    </Field>
+                                </>
+                            ) : (
+                                /* LISTED: listing price */
+                                <Field label="Listed price per unit">
+                                    <input
+                                        inputMode="decimal"
+                                        value={addForm.listingPrice}
+                                        onChange={(e) => onAddChange({ listingPrice: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                        placeholder="0.00"
+                                    />
+                                </Field>
+                            )}
 
-                                    <div className="mt-4 rounded-2xl border border-white/10 bg-zinc-950/30 p-4">
-                                        <div className="text-xs font-semibold text-zinc-300">Quick snapshot</div>
-                                        <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                                            <Snapshot label="Total cost" value={fmt(currencyView, parseMoneyToPence(addForm.purchaseTotal) * safeInt(addForm.quantity, 0))} />
+                            {/* SNAPSHOT */}
+                            <div className="rounded-2xl border border-white/10 bg-zinc-950/30 p-4 md:col-span-2">
+                                <div className="grid gap-2 sm:grid-cols-3">
+                                    <Snapshot
+                                        label="Total cost"
+                                        value={fmt(currencyView, parseMoneyToPence(addForm.purchaseTotal) * safeInt(addForm.quantity, 0))}
+                                    />
+
+                                    {addForm.status !== "LISTED" ? (
+                                        <>
                                             <Snapshot
                                                 label="Best profit"
                                                 value={fmt(
                                                     currencyView,
-                                                    (parseMoneyToPence(addForm.expectedBest) - parseMoneyToPence(addForm.purchaseTotal)) * safeInt(addForm.quantity, 0)
+                                                    (parseMoneyToPence(addForm.expectedBest) -
+                                                        parseMoneyToPence(addForm.purchaseTotal)) *
+                                                    safeInt(addForm.quantity, 0)
                                                 )}
                                                 good
                                             />
@@ -1418,122 +1676,46 @@ export default function InventoryPage() {
                                                 label="Worst profit"
                                                 value={fmt(
                                                     currencyView,
-                                                    (parseMoneyToPence(addForm.expectedWorst) - parseMoneyToPence(addForm.purchaseTotal)) * safeInt(addForm.quantity, 0)
+                                                    (parseMoneyToPence(addForm.expectedWorst) -
+                                                        parseMoneyToPence(addForm.purchaseTotal)) *
+                                                    safeInt(addForm.quantity, 0)
                                                 )}
                                             />
-                                        </div>
-                                        <div className="mt-2 text-[11px] text-zinc-400">Fees and sold breakdown can come later.</div>
-                                    </div>
-                                </Card>
-
-                                <Card title="Finance notes">
-                                    <ul className="space-y-2 text-sm text-zinc-300">
-                                        <li>• Purchase is all-in per unit (what it actually cost you).</li>
-                                        <li>• Expected best and worst are your range per unit.</li>
-                                        <li>• Display currency is global; values convert using FX.</li>
-                                    </ul>
-                                </Card>
-                            </div>
-                        ) : null}
-
-                        {addTab === "LISTING" && showListingFieldsInAdd ? (
-                            <div className="grid gap-4 md:grid-cols-2">
-                                <Card title="Add listing link(s)">
-                                    <div className="grid gap-4 md:grid-cols-2">
-                                        <Field label="Platform">
-                                            <select
-                                                value={addForm.listingPlatform}
-                                                onChange={(e) => onAddChange({ listingPlatform: e.target.value })}
-                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                            >
-                                                {PLATFORMS.filter(([v]) => v !== "NONE").map(([v, l]) => (
-                                                    <option key={v} value={v}>
-                                                        {l}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                        </Field>
-
-                                        <Field label="Listing link (URL)">
-                                            <input
-                                                value={addForm.listingUrl}
-                                                onChange={(e) => onAddChange({ listingUrl: e.target.value })}
-                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                                placeholder="https://…"
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Snapshot
+                                                label="Listed profit"
+                                                value={fmt(
+                                                    currencyView,
+                                                    (parseMoneyToPence(addForm.listingPrice) -
+                                                        parseMoneyToPence(addForm.purchaseTotal)) *
+                                                    safeInt(addForm.quantity, 0)
+                                                )}
+                                                good
                                             />
-                                        </Field>
-
-                                        <Field label="Listing price per unit (optional)">
-                                            <input
-                                                inputMode="decimal"
-                                                value={addForm.listingPrice}
-                                                onChange={(e) => onAddChange({ listingPrice: e.target.value })}
-                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                                placeholder="0.00"
+                                            <Snapshot
+                                                label="Listed price"
+                                                value={fmt(currencyView, parseMoneyToPence(addForm.listingPrice))}
                                             />
-                                        </Field>
-
-                                        <div className="flex items-end">
-                                            <button
-                                                type="button"
-                                                onClick={addListingToForm}
-                                                className="h-11 w-full rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white hover:bg-white/15"
-                                            >
-                                                Add link
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    <div className="mt-4 space-y-2">
-                                        {(Array.isArray(addForm.listings) ? addForm.listings : []).length === 0 ? (
-                                            <div className="text-sm text-zinc-300">No links added yet.</div>
-                                        ) : (
-                                            (addForm.listings || []).map((l, idx) => {
-                                                const href = linkify(l.url)
-                                                return (
-                                                    <div
-                                                        key={`${l.platform}-${idx}`}
-                                                        className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-zinc-950/30 p-3 sm:flex-row sm:items-center sm:justify-between"
-                                                    >
-                                                        <div className="min-w-0">
-                                                            <div className="text-sm font-semibold text-white">{l.platform}</div>
-                                                            <a
-                                                                href={href}
-                                                                target="_blank"
-                                                                rel="noreferrer"
-                                                                className="block truncate text-xs text-zinc-300 underline underline-offset-2 hover:text-white"
-                                                            >
-                                                                {href}
-                                                            </a>
-                                                            <div className="mt-1 text-xs text-zinc-400">
-                                                                Price: {l.pricePence == null ? "—" : fmt(currencyView, l.pricePence)}
-                                                            </div>
-                                                        </div>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => removeListingFromForm(idx)}
-                                                            className="h-10 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 text-sm font-semibold text-red-100 hover:bg-red-500/15"
-                                                        >
-                                                            Remove
-                                                        </button>
-                                                    </div>
-                                                )
-                                            })
-                                        )}
-                                    </div>
-                                </Card>
-
-                                <Card title="Tip">
-                                    <div className="text-sm text-zinc-300">
-                                        You can add multiple listing links across platforms. Enable the <span className="font-semibold text-white">Listings</span>{" "}
-                                        column to show them in the table.
-                                    </div>
-                                </Card>
+                                        </>
+                                    )}
+                                </div>
                             </div>
-                        ) : null}
+
+                            <Field label="Notes" className="md:col-span-2">
+                                <textarea
+                                    value={addForm.notes}
+                                    onChange={(e) => onAddChange({ notes: e.target.value })}
+                                    className="min-h-[110px] w-full resize-none rounded-2xl border border-white/10 bg-zinc-950/60 px-4 py-3 text-sm text-white outline-none focus:border-white/20"
+                                    placeholder="Anything useful…"
+                                />
+                            </Field>
+                        </div>
                     </form>
                 </Modal>
             ) : null}
+
 
             {/* EDIT MODAL */}
             {editOpen ? (
