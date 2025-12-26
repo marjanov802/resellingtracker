@@ -3,6 +3,8 @@
 
 import { useEffect, useMemo, useState } from "react"
 
+const MAX_VISIBLE_COLUMNS = 6
+
 const CURRENCY_META = {
     GBP: { symbol: "£", label: "GBP" },
     USD: { symbol: "$", label: "USD" },
@@ -300,17 +302,18 @@ function TrashIcon({ className = "" }) {
     )
 }
 
+// Max 6 visible columns by default (no horizontal scroll)
 const DEFAULT_COLUMNS = {
     status: true,
 
     sku: true,
-    category: true,
-    condition: true,
     quantity: true,
     purchase: true,
     salePrice: true,
     profit: true,
 
+    category: false,
+    condition: false,
     listings: false,
     purchasePerUnit: false,
     salePricePerUnit: false,
@@ -338,6 +341,18 @@ const COLUMN_DEFS = [
     { key: "ageDays", label: "Age (days)", width: "110px" },
     { key: "updated", label: "Updated", width: "180px" },
 ]
+
+const clampColumnsToMax = (cols, max = MAX_VISIBLE_COLUMNS) => {
+    const next = { ...cols }
+    let n = 0
+    for (const def of COLUMN_DEFS) {
+        if (next[def.key]) {
+            n += 1
+            if (n > max) next[def.key] = false
+        }
+    }
+    return next
+}
 
 function buildListingsFromForm({ status, listingPlatform, listingUrl, listingPrice, listings }) {
     const st = String(status || "UNLISTED").toUpperCase()
@@ -395,7 +410,8 @@ export default function InventoryPage() {
             const raw = localStorage.getItem("rt_inventory_columns_v2")
             if (!raw) return DEFAULT_COLUMNS
             const parsed = JSON.parse(raw)
-            return { ...DEFAULT_COLUMNS, ...(parsed && typeof parsed === "object" ? parsed : {}) }
+            const merged = { ...DEFAULT_COLUMNS, ...(parsed && typeof parsed === "object" ? parsed : {}) }
+            return clampColumnsToMax(merged, MAX_VISIBLE_COLUMNS)
         } catch {
             return DEFAULT_COLUMNS
         }
@@ -810,14 +826,21 @@ export default function InventoryPage() {
         }
     }
 
+    const enabledColumnsCount = useMemo(() => COLUMN_DEFS.reduce((a, d) => a + (columns[d.key] ? 1 : 0), 0), [columns])
+
     const columnKeys = useMemo(() => {
         const keys = []
-        for (const def of COLUMN_DEFS) if (columns[def.key]) keys.push(def.key)
+        for (const def of COLUMN_DEFS) {
+            if (columns[def.key]) keys.push(def.key)
+            if (keys.length >= MAX_VISIBLE_COLUMNS) break
+        }
         return keys
     }, [columns])
 
     const middleCols = useMemo(() => columnKeys.map((k) => COLUMN_DEFS.find((d) => d.key === k)).filter(Boolean), [columnKeys])
-    const middleGridCols = useMemo(() => middleCols.map((d) => d.width || "160px").join(" "), [middleCols])
+
+    // Fit-to-width grid (no horizontal scroll)
+    const middleGridCols = useMemo(() => `repeat(${Math.max(1, middleCols.length)}, minmax(0, 1fr))`, [middleCols])
 
     const filteredItems = useMemo(() => {
         const q = String(search || "").trim().toLowerCase()
@@ -904,9 +927,9 @@ export default function InventoryPage() {
         const total = convertMinor(c.purchaseTotal, c.itemCur, currencyView, fx.rates).value
 
         return (
-            <div className="flex flex-col leading-tight">
-                <span className="text-[13px] text-white">{fmt(currencyView, total)}</span>
-                <span className="text-[11px] text-zinc-400">{fmt(currencyView, perUnit)} / unit</span>
+            <div className="flex min-w-0 flex-col leading-tight">
+                <span className="truncate text-[13px] text-white">{fmt(currencyView, total)}</span>
+                <span className="truncate text-[11px] text-zinc-400">{fmt(currencyView, perUnit)} / unit</span>
             </div>
         )
     }
@@ -915,34 +938,34 @@ export default function InventoryPage() {
         const c = compute(it)
         if (c.salePriceTotal == null) return <span className="text-zinc-400">—</span>
         const v = convertMinor(c.salePriceTotal, c.itemCur, currencyView, fx.rates).value
-        return <span className="text-[13px] text-white">{fmt(currencyView, v)}</span>
+        return <span className="truncate text-[13px] text-white">{fmt(currencyView, v)}</span>
     }
 
     const renderProfit = (it) => {
         const c = compute(it)
         if (c.profitTotal == null) return <span className="text-zinc-400">—</span>
         const v = convertMinor(c.profitTotal, c.itemCur, currencyView, fx.rates).value
-        return <span className={v >= 0 ? "text-emerald-200 font-semibold text-[13px]" : "text-red-200 font-semibold text-[13px]"}>{fmt(currencyView, v)}</span>
+        return <span className={v >= 0 ? "truncate text-emerald-200 font-semibold text-[13px]" : "truncate text-red-200 font-semibold text-[13px]"}>{fmt(currencyView, v)}</span>
     }
 
     const renderPurchasePerUnit = (it) => {
         const c = compute(it)
         const v = convertMinor(c.purchaseTotalPerUnit, c.itemCur, currencyView, fx.rates).value
-        return <span className="text-[13px] text-white">{fmt(currencyView, v)}</span>
+        return <span className="truncate text-[13px] text-white">{fmt(currencyView, v)}</span>
     }
 
     const renderSalePerUnit = (it) => {
         const c = compute(it)
         if (c.salePricePerUnit == null) return <span className="text-zinc-400">—</span>
         const v = convertMinor(c.salePricePerUnit, c.itemCur, currencyView, fx.rates).value
-        return <span className="text-[13px] text-white">{fmt(currencyView, v)}</span>
+        return <span className="truncate text-[13px] text-white">{fmt(currencyView, v)}</span>
     }
 
     const renderProfitPerUnit = (it) => {
         const c = compute(it)
         if (c.profitPerUnit == null) return <span className="text-zinc-400">—</span>
         const v = convertMinor(c.profitPerUnit, c.itemCur, currencyView, fx.rates).value
-        return <span className={v >= 0 ? "text-emerald-200 font-semibold text-[13px]" : "text-red-200 font-semibold text-[13px]"}>{fmt(currencyView, v)}</span>
+        return <span className={v >= 0 ? "truncate text-emerald-200 font-semibold text-[13px]" : "truncate text-red-200 font-semibold text-[13px]"}>{fmt(currencyView, v)}</span>
     }
 
     const renderROI = (it) => {
@@ -951,21 +974,21 @@ export default function InventoryPage() {
         if (c.profitPerUnit == null || cost <= 0) return <span className="text-zinc-400">—</span>
         const roi = (c.profitPerUnit / cost) * 100
         if (!Number.isFinite(roi)) return <span className="text-zinc-400">—</span>
-        return <span className={roi >= 0 ? "text-emerald-200 font-semibold text-[13px]" : "text-red-200 font-semibold text-[13px]"}>{roi.toFixed(1)}%</span>
+        return <span className={roi >= 0 ? "truncate text-emerald-200 font-semibold text-[13px]" : "truncate text-red-200 font-semibold text-[13px]"}>{roi.toFixed(1)}%</span>
     }
 
     const renderAgeDays = (it) => {
         const created = it.createdAt ? new Date(it.createdAt).getTime() : null
         if (!created || !Number.isFinite(created)) return <span className="text-zinc-400">—</span>
         const days = Math.max(0, Math.floor((Date.now() - created) / (1000 * 60 * 60 * 24)))
-        return <span className="text-[13px] text-white">{days}</span>
+        return <span className="truncate text-[13px] text-white">{days}</span>
     }
 
     const renderUpdated = (it) => {
         if (!it.updatedAt) return <span className="text-zinc-400">—</span>
         const d = new Date(it.updatedAt)
         if (Number.isNaN(d.getTime())) return <span className="text-zinc-400">—</span>
-        return <span className="text-[13px] text-white">{d.toLocaleString()}</span>
+        return <span className="truncate text-[13px] text-white">{d.toLocaleString()}</span>
     }
 
     const renderListingsChips = (it) => {
@@ -974,8 +997,8 @@ export default function InventoryPage() {
         if (!ls.length) return <span className="text-zinc-400">—</span>
 
         return (
-            <div className="flex flex-wrap items-center gap-1.5">
-                {ls.map((l, idx) => {
+            <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                {ls.slice(0, 3).map((l, idx) => {
                     const href = linkify(l.url)
                     const label = (l.platform || "LINK").toUpperCase()
                     return (
@@ -989,13 +1012,14 @@ export default function InventoryPage() {
                                 e.stopPropagation()
                                 if (!href) e.preventDefault()
                             }}
-                            className="inline-flex max-w-[200px] items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-semibold text-white/90 hover:bg-white/10"
+                            className="inline-flex max-w-[140px] min-w-0 items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-2.5 py-1.5 text-[11px] font-semibold text-white/90 hover:bg-white/10"
                         >
                             <span className="truncate">{label}</span>
-                            <span className="text-white/50">↗</span>
+                            <span className="shrink-0 text-white/50">↗</span>
                         </a>
                     )
                 })}
+                {ls.length > 3 ? <span className="shrink-0 text-[11px] font-semibold text-zinc-400">+{ls.length - 3}</span> : null}
             </div>
         )
     }
@@ -1028,10 +1052,10 @@ export default function InventoryPage() {
 
     const renderMiddleCell = (it, key) => {
         if (key === "status") return <Pill text={compute(it).status} />
-        if (key === "sku") return <span className="text-[13px] text-zinc-200">{it.sku ?? "—"}</span>
-        if (key === "category") return <span className="text-[13px] text-zinc-200">{compute(it).meta.category ?? "—"}</span>
-        if (key === "condition") return <span className="text-[13px] text-zinc-200">{compute(it).meta.condition ?? "—"}</span>
-        if (key === "quantity") return <span className="text-[13px] text-zinc-200">{compute(it).q}</span>
+        if (key === "sku") return <span className="truncate text-[13px] text-zinc-200">{it.sku ?? "—"}</span>
+        if (key === "category") return <span className="truncate text-[13px] text-zinc-200">{compute(it).meta.category ?? "—"}</span>
+        if (key === "condition") return <span className="truncate text-[13px] text-zinc-200">{compute(it).meta.condition ?? "—"}</span>
+        if (key === "quantity") return <span className="truncate text-[13px] text-zinc-200">{compute(it).q}</span>
         if (key === "purchase") return renderPurchaseTotal(it)
         if (key === "salePrice") return renderSalePrice(it)
         if (key === "profit") return renderProfit(it)
@@ -1123,11 +1147,7 @@ export default function InventoryPage() {
                             Refresh
                         </button>
 
-                        <button
-                            type="button"
-                            onClick={openAdd}
-                            className="h-10 rounded-2xl bg-white px-4 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-100"
-                        >
+                        <button type="button" onClick={openAdd} className="h-10 rounded-2xl bg-white px-4 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-100">
                             Add item
                         </button>
                     </div>
@@ -1234,13 +1254,13 @@ export default function InventoryPage() {
                                 </div>
                             </div>
 
-                            {/* MIDDLE SCROLL: ALL DATA COLUMNS (status/profit/etc only show here if selected) */}
-                            <div className="min-w-0 flex-1 overflow-x-auto">
-                                <div className="min-w-max">
+                            {/* MIDDLE: NO SCROLL, max 6 columns */}
+                            <div className="min-w-0 flex-1 overflow-hidden">
+                                <div className="w-full">
                                     <div className={["grid border-b border-white/10", HEAD_H, HEADER_BG].join(" ")} style={{ gridTemplateColumns: middleGridCols }}>
                                         {middleCols.map((d) => (
-                                            <div key={d.key} className={["flex items-center text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}>
-                                                {d.label}
+                                            <div key={d.key} className={["flex min-w-0 items-center text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}>
+                                                <span className="truncate">{d.label}</span>
                                             </div>
                                         ))}
                                     </div>
@@ -1256,7 +1276,7 @@ export default function InventoryPage() {
                                                     onClick={() => openDetail(it)}
                                                 >
                                                     {middleCols.map((d) => (
-                                                        <div key={d.key} className={["flex items-center", CELL_PAD, CELL_Y].join(" ")}>
+                                                        <div key={d.key} className={["flex min-w-0 items-center overflow-hidden", CELL_PAD, CELL_Y].join(" ")}>
                                                             {renderMiddleCell(it, d.key)}
                                                         </div>
                                                     ))}
@@ -1408,7 +1428,11 @@ export default function InventoryPage() {
                     maxWidth="max-w-2xl"
                     footer={
                         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-                            <button type="button" onClick={() => setColumns(DEFAULT_COLUMNS)} className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10">
+                            <button
+                                type="button"
+                                onClick={() => setColumns(DEFAULT_COLUMNS)}
+                                className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
+                            >
                                 Reset to default
                             </button>
                             <button type="button" onClick={() => setColumnsOpen(false)} className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100">
@@ -1417,18 +1441,45 @@ export default function InventoryPage() {
                         </div>
                     }
                 >
+                    <div className="mb-3 text-xs text-zinc-300">
+                        Max visible columns: <span className="font-semibold text-white">{MAX_VISIBLE_COLUMNS}</span> (to avoid horizontal scrolling)
+                    </div>
+
                     <div className="grid gap-3 sm:grid-cols-2">
-                        {COLUMN_DEFS.map((d) => (
-                            <label key={d.key} className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 hover:bg-white/10">
-                                <div className="text-sm font-semibold text-white">{d.label}</div>
-                                <input
-                                    type="checkbox"
-                                    checked={!!columns[d.key]}
-                                    onChange={() => setColumns((p) => ({ ...p, [d.key]: !p[d.key] }))}
-                                    className="h-4 w-4 rounded border-white/20 bg-transparent accent-white"
-                                />
-                            </label>
-                        ))}
+                        {COLUMN_DEFS.map((d) => {
+                            const checked = !!columns[d.key]
+                            const maxed = enabledColumnsCount >= MAX_VISIBLE_COLUMNS
+                            const disableEnable = !checked && maxed
+
+                            return (
+                                <label
+                                    key={d.key}
+                                    className={[
+                                        "flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 hover:bg-white/10",
+                                        disableEnable ? "opacity-50 cursor-not-allowed" : "",
+                                    ].join(" ")}
+                                >
+                                    <div className="text-sm font-semibold text-white">{d.label}</div>
+                                    <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        disabled={disableEnable}
+                                        onChange={() => {
+                                            setColumns((p) => {
+                                                const currentlyOn = !!p[d.key]
+                                                if (!currentlyOn && enabledColumnsCount >= MAX_VISIBLE_COLUMNS) {
+                                                    showToast("error", `Max ${MAX_VISIBLE_COLUMNS} columns`)
+                                                    return p
+                                                }
+                                                const next = { ...p, [d.key]: !currentlyOn }
+                                                return clampColumnsToMax(next, MAX_VISIBLE_COLUMNS)
+                                            })
+                                        }}
+                                        className="h-4 w-4 rounded border-white/20 bg-transparent accent-white"
+                                    />
+                                </label>
+                            )
+                        })}
                     </div>
                 </Modal>
             ) : null}
