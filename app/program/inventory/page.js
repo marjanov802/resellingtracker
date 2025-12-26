@@ -12,66 +12,326 @@ const CURRENCY_META = {
     JPY: { symbol: "¥", label: "JPY" },
 }
 
-const CATEGORIES = [
-    ["CLOTHING", "Clothing"],
-    ["SHOES", "Shoes"],
-    ["TECH", "Tech"],
-    ["COLLECTIBLES", "Collectibles"],
-    ["TRADING_CARDS", "Trading cards"],
-    ["WATCHES", "Watches"],
-    ["BAGS", "Bags"],
-    ["HOME", "Home"],
-    ["BOOKS", "Books"],
-    ["TOYS", "Toys"],
-    ["BEAUTY", "Beauty"],
+const STATUSES = [
+    ["UNLISTED", "Unlisted"],
+    ["LISTED", "Listed"],
+    ["SOLD", "Sold"],
+]
+
+const PLATFORMS = [
+    ["NONE", "None"],
+    ["EBAY", "eBay"],
+    ["VINTED", "Vinted"],
+    ["DEPOP", "Depop"],
+    ["STOCKX", "StockX"],
+    ["GOAT", "GOAT"],
+    ["GRAILED", "Grailed"],
+    ["FACEBOOK", "Facebook"],
+    ["ETSY", "Etsy"],
     ["OTHER", "Other"],
 ]
 
-const CONDITIONS = [
-    ["NEW", "New"],
-    ["LIKE_NEW", "Like new"],
-    ["GOOD", "Good"],
-    ["FAIR", "Fair"],
-    ["POOR", "Poor"],
+const CATEGORIES = [
+    "Clothes",
+    "Shoes",
+    "Tech",
+    "Collectables",
+    "Cards",
+    "Watches",
+    "Bags",
+    "Jewellery",
+    "Home",
+    "Other",
 ]
+
+const CONDITIONS = ["New", "New (with tags)", "Like new", "Good", "Fair", "Poor"]
 
 const fmt = (currency, minorUnits) => {
     const c = CURRENCY_META[currency] || CURRENCY_META.GBP
     const n = Number.isFinite(minorUnits) ? minorUnits : 0
-    return `${c.symbol}${(n / 100).toFixed(2)}`
+    const sign = n < 0 ? "-" : ""
+    return `${sign}${c.symbol}${(Math.abs(n) / 100).toFixed(2)}`
 }
 
-const clampInt0 = (v) => {
-    const n = Number(v)
-    return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0
-}
-
-// rates map is "units per USD" from open.er-api.com
+// rates map is "units per USD"
 const convertMinor = (minor, fromCur, toCur, rates) => {
     const m = Number.isFinite(minor) ? minor : 0
     const f = (fromCur || "GBP").toUpperCase()
     const t = (toCur || "GBP").toUpperCase()
-
-    if (!rates || !rates[f] || !rates[t]) {
-        return { value: m, ok: f === t }
-    }
-
     if (f === t) return { value: m, ok: true }
+    if (!rates || !rates[f] || !rates[t]) return { value: m, ok: false }
 
-    // amountUSD = amount / rate[from] because rate[from] = fromUnits per USD
     const amountUSD = (m / 100) / rates[f]
     const amountTo = amountUSD * rates[t]
-
     return { value: Math.round(amountTo * 100), ok: true }
 }
+
+const parseMoneyToPence = (s) => {
+    const v = String(s ?? "").replace(/[^\d.]/g, "")
+    const n = Number(v)
+    if (!Number.isFinite(n)) return 0
+    return Math.max(0, Math.round(n * 100))
+}
+
+const safeInt = (x, d = 0) => {
+    const n = Number(x)
+    if (!Number.isFinite(n)) return d
+    return Math.max(0, Math.trunc(n))
+}
+
+const safeStr = (x) => String(x ?? "").trim()
+
+/**
+ * Notes payload (v3)
+ * - purchaseTotalPence: total all-in purchase cost PER UNIT
+ * - expectedBestPence / expectedWorstPence: expected sale PER UNIT
+ * - listings: array of { platform, url, pricePence } (price is per unit)
+ */
+const encodeNotes = (plainNotes, meta) => {
+    const payload = {
+        v: 3,
+        notes: String(plainNotes || "").trim() || "",
+        meta: meta && typeof meta === "object" ? meta : {},
+    }
+    return JSON.stringify(payload)
+}
+
+const decodeNotes = (notes) => {
+    const s = String(notes ?? "")
+    if (!s) return { notes: "", meta: {} }
+    try {
+        const o = JSON.parse(s)
+        if (o && typeof o === "object" && (o.v === 1 || o.v === 2 || o.v === 3)) {
+            return { notes: String(o.notes || ""), meta: o.meta && typeof o.meta === "object" ? o.meta : {} }
+        }
+        return { notes: s, meta: {} }
+    } catch {
+        return { notes: s, meta: {} }
+    }
+}
+
+function normaliseMeta(meta) {
+    const m = meta && typeof meta === "object" ? meta : {}
+    const currency = (m.currency || "GBP").toUpperCase()
+    const status = (m.status || "UNLISTED").toUpperCase()
+    const category = m.category || null
+    const condition = m.condition || null
+
+    const purchaseTotalPence = Number(m.purchaseTotalPence) || 0
+    const expectedBestPence = m.expectedBestPence == null ? null : Number(m.expectedBestPence)
+    const expectedWorstPence = m.expectedWorstPence == null ? null : Number(m.expectedWorstPence)
+
+    const listings = Array.isArray(m.listings)
+        ? m.listings
+            .map((x) => ({
+                platform: (x?.platform || "OTHER").toUpperCase(),
+                url: safeStr(x?.url) || "",
+                pricePence: x?.pricePence == null ? null : Number(x.pricePence),
+            }))
+            .filter((x) => x.url || Number.isFinite(x.pricePence))
+        : []
+
+    return {
+        currency,
+        status,
+        category,
+        condition,
+        purchaseTotalPence,
+        expectedBestPence,
+        expectedWorstPence,
+        listings,
+    }
+}
+
+function compute(it) {
+    const decoded = decodeNotes(it.notes)
+    const meta = normaliseMeta(decoded.meta)
+
+    const itemCur = meta.currency
+    const q = Number(it.quantity) || 0
+    const status = meta.status
+
+    const purchaseTotalPerUnit =
+        meta.purchaseTotalPence > 0 ? meta.purchaseTotalPence : Number(it.costPence) || 0
+
+    const purchaseTotal = purchaseTotalPerUnit * q
+
+    const bestPerUnit = meta.expectedBestPence == null ? null : meta.expectedBestPence
+    const worstPerUnit = meta.expectedWorstPence == null ? null : meta.expectedWorstPence
+
+    const profitBestPerUnit = bestPerUnit == null ? null : bestPerUnit - purchaseTotalPerUnit
+    const profitWorstPerUnit = worstPerUnit == null ? null : worstPerUnit - purchaseTotalPerUnit
+
+    const profitBestTotal = profitBestPerUnit == null ? null : profitBestPerUnit * q
+    const profitWorstTotal = profitWorstPerUnit == null ? null : profitWorstPerUnit * q
+
+    // primary listing display: first listing price if present
+    const firstListing = meta.listings?.[0] || null
+    const listingPricePerUnit = firstListing?.pricePence ?? null
+    const listingPriceTotal = listingPricePerUnit == null ? null : listingPricePerUnit * q
+
+    return {
+        notesPlain: decoded.notes,
+        meta,
+        itemCur,
+        q,
+        status,
+        purchaseTotalPerUnit,
+        purchaseTotal,
+        listingPricePerUnit,
+        listingPriceTotal,
+        profitBestTotal,
+        profitWorstTotal,
+    }
+}
+
+function Pill({ text }) {
+    const t = String(text || "").toUpperCase()
+    const cls =
+        t === "SOLD"
+            ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-100"
+            : t === "LISTED"
+                ? "border-blue-400/20 bg-blue-500/10 text-blue-100"
+                : "border-white/10 bg-white/5 text-zinc-200"
+
+    return (
+        <span className={["inline-flex items-center rounded-2xl border px-3 py-1 text-xs font-semibold", cls].join(" ")}>
+            {t}
+        </span>
+    )
+}
+
+function Modal({ title, onClose, children, footer, maxWidth = "max-w-3xl" }) {
+    return (
+        <div className="fixed inset-0 z-50 flex items-end justify-center p-4 sm:items-center">
+            <button aria-label="Close" onClick={onClose} className="absolute inset-0 bg-black/70" />
+            <div className={["relative w-full rounded-3xl border border-white/10 bg-zinc-950/90 p-5 shadow-2xl backdrop-blur", maxWidth].join(" ")}>
+                <div className="mb-4 flex items-start justify-between gap-4">
+                    <div className="text-lg font-semibold text-white">{title}</div>
+                    <button
+                        onClick={onClose}
+                        className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10"
+                    >
+                        Close
+                    </button>
+                </div>
+
+                <div>{children}</div>
+                {footer ? <div className="mt-5">{footer}</div> : null}
+            </div>
+        </div>
+    )
+}
+
+function Field({ label, children, className = "" }) {
+    return (
+        <div className={["space-y-2", className].join(" ")}>
+            <div className="text-xs font-semibold text-zinc-300">{label}</div>
+            {children}
+        </div>
+    )
+}
+
+function SectionTabs({ tabs, value, onChange }) {
+    return (
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-white/5 p-2">
+            {tabs.map((t) => (
+                <button
+                    key={t.value}
+                    type="button"
+                    onClick={() => onChange(t.value)}
+                    className={[
+                        "h-10 rounded-2xl px-4 text-sm font-semibold transition",
+                        value === t.value ? "bg-white text-zinc-950" : "bg-transparent text-white/90 hover:bg-white/10",
+                    ].join(" ")}
+                >
+                    {t.label}
+                </button>
+            ))}
+        </div>
+    )
+}
+
+function StatCard({ label, value, sub }) {
+    return (
+        <div className="rounded-3xl border border-white/10 bg-white/5 p-5 shadow-lg backdrop-blur">
+            <div className="text-xs font-semibold uppercase tracking-wide text-zinc-300">{label}</div>
+            <div className="mt-2 text-3xl font-semibold text-white">{value}</div>
+            <div className="mt-1 text-xs text-zinc-300">{sub}</div>
+        </div>
+    )
+}
+
+function Card({ title, children, className = "" }) {
+    return (
+        <div className={["rounded-3xl border border-white/10 bg-white/5 p-5", className].join(" ")}>
+            <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-300">{title}</div>
+            {children}
+        </div>
+    )
+}
+
+function Row({ label, value }) {
+    return (
+        <div className="flex items-center justify-between gap-4 py-2">
+            <div className="text-xs font-semibold text-zinc-300">{label}</div>
+            <div className="text-sm text-white">{value}</div>
+        </div>
+    )
+}
+
+function linkify(url) {
+    const u = String(url || "").trim()
+    if (!u) return null
+    if (/^https?:\/\//i.test(u)) return u
+    return `https://${u}`
+}
+
+const DEFAULT_COLUMNS = {
+    sku: true,
+    category: true,
+    condition: true,
+    quantity: true,
+    purchase: true,
+    status: true,
+    listings: false, // show ALL listing links (chips) in the table
+    listingPrice: true,
+}
+
+const COLUMN_DEFS = [
+    { key: "sku", label: "SKU", width: "150px" },
+    { key: "category", label: "Category", width: "160px" },
+    { key: "condition", label: "Condition", width: "160px" },
+    { key: "quantity", label: "Qty", width: "80px" },
+    { key: "purchase", label: "Purchase total", width: "190px" },
+    { key: "status", label: "Status", width: "130px" },
+    { key: "listings", label: "Listings", width: "420px" },
+    { key: "listingPrice", label: "Listing price", width: "170px" },
+]
 
 export default function InventoryPage() {
     const [items, setItems] = useState([])
     const [loading, setLoading] = useState(true)
-
     const [toast, setToast] = useState({ type: "", msg: "" })
 
-    // This is a "view currency" that converts ALL displayed money values.
+    const [selected, setSelected] = useState(() => new Set())
+
+    const [detailOpen, setDetailOpen] = useState(false)
+    const [detailItem, setDetailItem] = useState(null)
+
+    const [columnsOpen, setColumnsOpen] = useState(false)
+    const [columns, setColumns] = useState(() => {
+        if (typeof window === "undefined") return DEFAULT_COLUMNS
+        try {
+            const raw = localStorage.getItem("rt_inventory_columns_v1")
+            if (!raw) return DEFAULT_COLUMNS
+            const parsed = JSON.parse(raw)
+            return { ...DEFAULT_COLUMNS, ...(parsed && typeof parsed === "object" ? parsed : {}) }
+        } catch {
+            return DEFAULT_COLUMNS
+        }
+    })
+
     const [currencyView, setCurrencyView] = useState(() => {
         if (typeof window === "undefined") return "GBP"
         return localStorage.getItem("rt_currency_view") || "GBP"
@@ -85,28 +345,38 @@ export default function InventoryPage() {
         error: null,
     })
 
-    const [selected, setSelected] = useState(() => new Set())
+    // ADD MODAL
+    const [addOpen, setAddOpen] = useState(false)
+    const [addSaving, setAddSaving] = useState(false)
+    const [addTab, setAddTab] = useState("BASIC")
 
-    const [isModalOpen, setIsModalOpen] = useState(false)
-    const [submitting, setSubmitting] = useState(false)
-
-    const [form, setForm] = useState({
-        name: "",
+    const [addForm, setAddForm] = useState(() => ({
+        title: "",
         sku: "",
         quantity: 1,
-        currency: "GBP",
-        purchasePence: 0,
-        expectedBestPence: "",
-        expectedWorstPence: "",
-        condition: "GOOD",
-        category: "OTHER",
+
+        category: "Clothes",
+        condition: "Good",
+        status: "UNLISTED",
+
+        // money (per unit)
+        purchaseTotal: "0.00",
+        expectedBest: "0.00",
+        expectedWorst: "0.00",
+
+        // listing (multi)
+        listingPlatform: "EBAY",
+        listingUrl: "",
+        listingPrice: "0.00",
+        listings: [],
+
         notes: "",
-    })
+    }))
 
     const showToast = (type, msg) => {
         setToast({ type, msg })
         window.clearTimeout(showToast._t)
-        showToast._t = window.setTimeout(() => setToast({ type: "", msg: "" }), 1600)
+        showToast._t = window.setTimeout(() => setToast({ type: "", msg: "" }), 1800)
     }
 
     const loadItems = async () => {
@@ -157,36 +427,11 @@ export default function InventoryPage() {
         if (typeof window !== "undefined") localStorage.setItem("rt_currency_view", currencyView)
     }, [currencyView])
 
-    const totals = useMemo(() => {
-        const count = items.length
-        const qty = items.reduce((a, it) => a + (Number(it.quantity) || 0), 0)
-
-        let invested = 0
-        let bestProfit = 0
-        let worstProfit = 0
-
-        for (const it of items) {
-            const itemCur = (it.currency || "GBP").toUpperCase()
-            const q = Number(it.quantity) || 0
-            const purchase = Number(it.purchasePence) || 0
-            const best = it.expectedBestPence === null || it.expectedBestPence === undefined ? null : Number(it.expectedBestPence)
-            const worst = it.expectedWorstPence === null || it.expectedWorstPence === undefined ? null : Number(it.expectedWorstPence)
-
-            const investedItem = purchase * q
-            invested += convertMinor(investedItem, itemCur, currencyView, fx.rates).value
-
-            if (best !== null) {
-                const p = (best - purchase) * q
-                bestProfit += convertMinor(p, itemCur, currencyView, fx.rates).value
-            }
-            if (worst !== null) {
-                const p = (worst - purchase) * q
-                worstProfit += convertMinor(p, itemCur, currencyView, fx.rates).value
-            }
+    useEffect(() => {
+        if (typeof window !== "undefined") {
+            localStorage.setItem("rt_inventory_columns_v1", JSON.stringify(columns))
         }
-
-        return { count, qty, invested, bestProfit, worstProfit }
-    }, [items, currencyView, fx.rates])
+    }, [columns])
 
     const toggleSelect = (id) => {
         setSelected((prev) => {
@@ -200,10 +445,33 @@ export default function InventoryPage() {
     const selectAll = () => setSelected(new Set(items.map((x) => x.id)))
     const clearSelection = () => setSelected(new Set())
 
+    const openDetail = (it) => {
+        setDetailItem(it)
+        setDetailOpen(true)
+    }
+
+    const singleDelete = async (id) => {
+        try {
+            const res = await fetch(`/api/items/${id}`, { method: "DELETE" })
+            const data = await res.json().catch(() => null)
+            if (!res.ok) throw new Error(data?.error || `Delete failed (${res.status})`)
+            showToast("ok", "Deleted")
+            setSelected((prev) => {
+                const next = new Set(prev)
+                next.delete(id)
+                return next
+            })
+            await loadItems()
+            setDetailOpen(false)
+            setDetailItem(null)
+        } catch (e) {
+            showToast("error", e?.message || "Delete failed")
+        }
+    }
+
     const bulkDelete = async () => {
         const ids = Array.from(selected)
         if (ids.length === 0) return showToast("error", "No items selected")
-
         try {
             const res = await fetch("/api/items/bulk-delete", {
                 method: "POST",
@@ -212,7 +480,6 @@ export default function InventoryPage() {
             })
             const data = await res.json().catch(() => null)
             if (!res.ok) throw new Error(data?.error || `Failed (${res.status})`)
-
             showToast("ok", `Deleted ${data?.deleted ?? ids.length}`)
             clearSelection()
             await loadItems()
@@ -221,64 +488,206 @@ export default function InventoryPage() {
         }
     }
 
-    const onFormChange = (key) => (e) => {
-        const v = e.target.value
-        setForm((p) => ({ ...p, [key]: v }))
+    const openAdd = () => {
+        setAddTab("BASIC")
+        setAddForm({
+            title: "",
+            sku: "",
+            quantity: 1,
+
+            category: "Clothes",
+            condition: "Good",
+            status: "UNLISTED",
+
+            purchaseTotal: "0.00",
+            expectedBest: "0.00",
+            expectedWorst: "0.00",
+
+            listingPlatform: "EBAY",
+            listingUrl: "",
+            listingPrice: "0.00",
+            listings: [],
+
+            notes: "",
+        })
+        setAddOpen(true)
     }
 
-    const submitCreate = async (e) => {
-        e.preventDefault()
-        setSubmitting(true)
+    const onAddChange = (patch) => setAddForm((p) => ({ ...p, ...patch }))
 
+    const addStatus = String(addForm.status || "UNLISTED").toUpperCase()
+    const showListingFieldsInAdd = addStatus === "LISTED" || addStatus === "SOLD"
+
+    useEffect(() => {
+        if (!showListingFieldsInAdd && addTab === "LISTING") setAddTab("BASIC")
+    }, [showListingFieldsInAdd, addTab])
+
+    const addListingToForm = () => {
+        const url = safeStr(addForm.listingUrl)
+        if (!url) return showToast("error", "Listing link is required")
+        const platform = (addForm.listingPlatform || "OTHER").toUpperCase()
+        const pricePence = parseMoneyToPence(addForm.listingPrice)
+        const listing = { platform, url, pricePence }
+
+        onAddChange({
+            listingUrl: "",
+            listingPrice: "0.00",
+            listings: Array.isArray(addForm.listings) ? [...addForm.listings, listing] : [listing],
+        })
+    }
+
+    const removeListingFromForm = (idx) => {
+        const arr = Array.isArray(addForm.listings) ? [...addForm.listings] : []
+        arr.splice(idx, 1)
+        onAddChange({ listings: arr })
+    }
+
+    const submitAdd = async (e) => {
+        e?.preventDefault?.()
+        const name = String(addForm.title || "").trim()
+        if (!name) return showToast("error", "Title is required")
+
+        const status = (addForm.status || "UNLISTED").toUpperCase()
+
+        const purchaseTotalPence = parseMoneyToPence(addForm.purchaseTotal)
+        const expectedBestPence = parseMoneyToPence(addForm.expectedBest)
+        const expectedWorstPence = parseMoneyToPence(addForm.expectedWorst)
+
+        const listings =
+            showListingFieldsInAdd && Array.isArray(addForm.listings)
+                ? addForm.listings
+                    .map((x) => ({
+                        platform: (x?.platform || "OTHER").toUpperCase(),
+                        url: safeStr(x?.url) || "",
+                        pricePence: x?.pricePence == null ? null : Number(x.pricePence),
+                    }))
+                    .filter((x) => x.url || Number.isFinite(x.pricePence))
+                : []
+
+        const meta = {
+            currency: currencyView,
+            status,
+            category: addForm.category || null,
+            condition: addForm.condition || null,
+
+            purchaseTotalPence,
+            expectedBestPence,
+            expectedWorstPence,
+
+            listings,
+        }
+
+        const payload = {
+            name,
+            sku: safeStr(addForm.sku) || null,
+            quantity: safeInt(addForm.quantity, 0),
+            costPence: purchaseTotalPence,
+            notes: encodeNotes(addForm.notes, meta),
+        }
+
+        setAddSaving(true)
         try {
-            const payload = {
-                name: String(form.name || "").trim(),
-                sku: String(form.sku || "").trim() || null,
-                quantity: Math.max(0, Math.trunc(Number(form.quantity) || 0)),
-                currency: String(form.currency || "GBP").toUpperCase(),
-                purchasePence: Math.max(0, Math.trunc(Number(form.purchasePence) || 0)),
-                expectedBestPence: form.expectedBestPence === "" ? null : clampInt0(form.expectedBestPence),
-                expectedWorstPence: form.expectedWorstPence === "" ? null : clampInt0(form.expectedWorstPence),
-                condition: String(form.condition || "GOOD").toUpperCase(),
-                category: String(form.category || "OTHER").toUpperCase(),
-                notes: String(form.notes || "").trim() || null,
-            }
-
-            if (!payload.name) throw new Error("Name is required")
-
             const res = await fetch("/api/items", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
             })
-
             const data = await res.json().catch(() => null)
-            if (!res.ok) throw new Error(data?.error || `Failed (${res.status})`)
-
-            showToast("ok", "Created")
-            setIsModalOpen(false)
-            setForm({
-                name: "",
-                sku: "",
-                quantity: 1,
-                currency: currencyView,
-                purchasePence: 0,
-                expectedBestPence: "",
-                expectedWorstPence: "",
-                condition: "GOOD",
-                category: "OTHER",
-                notes: "",
-            })
+            if (!res.ok) throw new Error(data?.error || `Create failed (${res.status})`)
+            showToast("ok", "Item created")
+            setAddOpen(false)
             await loadItems()
         } catch (e2) {
             showToast("error", e2?.message || "Create failed")
         } finally {
-            setSubmitting(false)
+            setAddSaving(false)
         }
     }
 
-    const selectedCount = selected.size
-    const allSelected = items.length > 0 && selectedCount === items.length
+    const columnKeys = useMemo(() => {
+        const keys = []
+        for (const def of COLUMN_DEFS) {
+            if (columns[def.key]) keys.push(def.key)
+        }
+        return keys
+    }, [columns])
+
+    const gridCols = useMemo(() => {
+        const base = ["44px", "minmax(260px, 1fr)"] // checkbox + title
+        const dynamic = columnKeys.map((k) => COLUMN_DEFS.find((d) => d.key === k)?.width || "160px")
+        const actions = ["130px"]
+        return [...base, ...dynamic, ...actions].join(" ")
+    }, [columnKeys])
+
+    const totals = useMemo(() => {
+        const rowCount = items.length
+        const unitCount = items.reduce((a, it) => a + (Number(it.quantity) || 0), 0)
+
+        let invested = 0
+        let best = 0
+        let worst = 0
+
+        for (const it of items) {
+            const c = compute(it)
+            const toView = (minor) => convertMinor(minor, c.itemCur, currencyView, fx.rates).value
+
+            invested += toView(c.purchaseTotal)
+
+            if (c.profitBestTotal != null) best += toView(c.profitBestTotal)
+            if (c.profitWorstTotal != null) worst += toView(c.profitWorstTotal)
+        }
+
+        return { rowCount, unitCount, invested, best, worst }
+    }, [items, currencyView, fx.rates])
+
+    const renderPurchaseTotal = (it) => {
+        const c = compute(it)
+        const perUnit = convertMinor(c.purchaseTotalPerUnit, c.itemCur, currencyView, fx.rates).value
+        const total = convertMinor(c.purchaseTotal, c.itemCur, currencyView, fx.rates).value
+
+        return (
+            <div className="flex flex-col leading-tight">
+                <span className="text-sm text-white">{fmt(currencyView, total)}</span>
+                <span className="text-[11px] text-zinc-400">{fmt(currencyView, perUnit)} / unit</span>
+            </div>
+        )
+    }
+
+    const renderListingsChips = (it) => {
+        const c = compute(it)
+        const ls = c.meta.listings || []
+        if (!ls.length) return <span className="text-zinc-400">—</span>
+
+        return (
+            <div className="flex flex-wrap items-center gap-2">
+                {ls.map((l, idx) => {
+                    const href = linkify(l.url)
+                    const label = (l.platform || "LINK").toUpperCase()
+                    return (
+                        <a
+                            key={`${label}-${idx}`}
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={href}
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex max-w-[220px] items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/90 hover:bg-white/10"
+                        >
+                            <span className="truncate">{label}</span>
+                            <span className="text-white/50">↗</span>
+                        </a>
+                    )
+                })}
+            </div>
+        )
+    }
+
+    const renderListingPrice = (it) => {
+        const c = compute(it)
+        if (c.listingPriceTotal == null) return <span className="text-zinc-400">—</span>
+        const v = convertMinor(c.listingPriceTotal, c.itemCur, currencyView, fx.rates).value
+        return <span className="text-sm text-white">{fmt(currencyView, v)}</span>
+    }
 
     return (
         <div className="min-h-[calc(100vh-64px)] bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 text-zinc-50">
@@ -287,7 +696,7 @@ export default function InventoryPage() {
                     <div>
                         <h1 className="text-3xl font-semibold tracking-tight">Inventory</h1>
                         <p className="mt-1 text-sm text-zinc-300">
-                            All money values are converted into your selected display currency.
+                            Customise columns, add items, bulk delete, and keep listing links per platform.
                         </p>
                     </div>
 
@@ -312,9 +721,17 @@ export default function InventoryPage() {
                                 className="h-9 rounded-xl border border-white/10 bg-white/10 px-3 text-xs font-semibold text-white/90 hover:bg-white/15"
                                 title="Refresh exchange rates"
                             >
-                                {fx.loading ? "FX…" : "FX refresh"}
+                                {fx.loading ? "FX…" : "FX"}
                             </button>
                         </div>
+
+                        <button
+                            type="button"
+                            onClick={() => setColumnsOpen(true)}
+                            className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15"
+                        >
+                            Columns
+                        </button>
 
                         <button
                             type="button"
@@ -326,10 +743,7 @@ export default function InventoryPage() {
 
                         <button
                             type="button"
-                            onClick={() => {
-                                setForm((p) => ({ ...p, currency: currencyView }))
-                                setIsModalOpen(true)
-                            }}
+                            onClick={openAdd}
                             className="h-10 rounded-2xl bg-white px-4 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-100"
                         >
                             Add item
@@ -352,160 +766,131 @@ export default function InventoryPage() {
                     </div>
                 ) : null}
 
-                {fx.error ? (
-                    <div className="mb-5">
-                        <div className="rounded-2xl border border-yellow-400/20 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-100">
-                            FX unavailable: {fx.error}. Showing original currency values where conversion is not possible.
-                        </div>
-                    </div>
-                ) : null}
-
-                <div className="mb-6 grid gap-4 md:grid-cols-4">
-                    <StatCard label="Items" value={totals.count} sub={loading ? "Loading…" : "Live"} />
-                    <StatCard label="Quantity" value={totals.qty} sub="Total units" />
-                    <StatCard
-                        label={`Invested (${currencyView})`}
-                        value={fmt(currencyView, totals.invested)}
-                        sub="Purchase × qty (converted)"
-                    />
-                    <StatCard
-                        label={`Profit range (${currencyView})`}
-                        value={`${fmt(currencyView, totals.worstProfit)} → ${fmt(currencyView, totals.bestProfit)}`}
-                        sub="Worst → best (converted)"
-                    />
+                <div className="mb-6 grid gap-4 md:grid-cols-5">
+                    <StatCard label="Items (rows)" value={totals.rowCount} sub="Unique records" />
+                    <StatCard label="Quantity (units)" value={totals.unitCount} sub="Sum of all quantities" />
+                    <StatCard label={`Invested (${currencyView})`} value={fmt(currencyView, totals.invested)} sub="Total purchase cost" />
+                    <StatCard label={`Best profit (${currencyView})`} value={fmt(currencyView, totals.best)} sub="Expected best sale - cost" />
+                    <StatCard label={`Worst profit (${currencyView})`} value={fmt(currencyView, totals.worst)} sub="Expected worst sale - cost" />
                 </div>
 
                 <div className="rounded-3xl border border-white/10 bg-white/5 p-5 shadow-lg backdrop-blur">
                     <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                         <div>
                             <div className="text-sm font-semibold text-white">Your items</div>
-                            <div className="text-xs text-zinc-300">{loading ? "Loading…" : `${items.length} item(s)`}</div>
+                            <div className="text-xs text-zinc-300">
+                                {loading ? "Loading…" : `${items.length} row(s)`} • click a row for details
+                            </div>
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2">
                             <button
                                 type="button"
-                                onClick={() => (allSelected ? clearSelection() : selectAll())}
+                                onClick={() => (items.length && selected.size === items.length ? clearSelection() : selectAll())}
                                 className="h-10 rounded-2xl border border-white/10 bg-transparent px-4 text-sm font-semibold text-white/90 transition hover:bg-white/5"
                             >
-                                {allSelected ? "Clear all" : "Select all"}
+                                {items.length && selected.size === items.length ? "Clear all" : "Select all"}
                             </button>
 
                             <button
                                 type="button"
                                 onClick={bulkDelete}
-                                disabled={selectedCount === 0}
+                                disabled={selected.size === 0}
                                 className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
                             >
-                                Bulk delete ({selectedCount})
+                                Bulk delete ({selected.size})
                             </button>
                         </div>
                     </div>
 
-                    <div className="overflow-x-auto rounded-2xl border border-white/10">
-                        <table className="w-full min-w-[1300px] text-left text-sm">
-                            <thead className="bg-white/5 text-xs text-zinc-200">
-                                <tr>
-                                    <th className="w-[44px] px-4 py-3">
-                                        <span className="sr-only">Select</span>
-                                    </th>
-                                    <th className="px-4 py-3">Title</th>
-                                    <th className="px-4 py-3">SKU</th>
-                                    <th className="px-4 py-3">Category</th>
-                                    <th className="px-4 py-3">Condition</th>
-                                    <th className="px-4 py-3">Qty</th>
-                                    <th className="px-4 py-3">{`Purchase (${currencyView})`}</th>
-                                    <th className="px-4 py-3">{`Expected sale (${currencyView})`}</th>
-                                    <th className="px-4 py-3">{`Profit (range) (${currencyView})`}</th>
-                                    <th className="px-4 py-3 text-right">Original</th>
-                                </tr>
-                            </thead>
+                    {/* SIDE SCROLL */}
+                    <div className="rounded-2xl border border-white/10 overflow-hidden">
+                        <div className="overflow-x-auto">
+                            <div className="min-w-[920px]">
+                                <div className="grid bg-white/5 text-xs font-semibold text-zinc-200" style={{ gridTemplateColumns: gridCols }}>
+                                    <div className="px-4 py-3"></div>
+                                    <div className="px-4 py-3">Title</div>
 
-                            <tbody className="divide-y divide-white/10">
+                                    {columns.sku ? <div className="px-4 py-3">SKU</div> : null}
+                                    {columns.category ? <div className="px-4 py-3">Category</div> : null}
+                                    {columns.condition ? <div className="px-4 py-3">Condition</div> : null}
+                                    {columns.quantity ? <div className="px-4 py-3">Qty</div> : null}
+                                    {columns.purchase ? <div className="px-4 py-3">Purchase total</div> : null}
+                                    {columns.status ? <div className="px-4 py-3">Status</div> : null}
+                                    {columns.listings ? <div className="px-4 py-3">Listings</div> : null}
+                                    {columns.listingPrice ? <div className="px-4 py-3">Listing price</div> : null}
+
+                                    <div className="px-4 py-3 text-right">Actions</div>
+                                </div>
+
                                 {!loading && items.length === 0 ? (
-                                    <tr>
-                                        <td className="px-4 py-6 text-zinc-300" colSpan={10}>
-                                            No items yet — click “Add item”.
-                                        </td>
-                                    </tr>
+                                    <div className="px-4 py-6 text-sm text-zinc-300">No items yet. Click “Add item”.</div>
                                 ) : null}
 
-                                {items.map((it, idx) => {
-                                    const rowBg = idx % 2 === 0 ? "bg-zinc-950/30" : "bg-zinc-950/10"
+                                <div className="divide-y divide-white/10">
+                                    {items.map((it, idx) => {
+                                        const c = compute(it)
+                                        return (
+                                            <div
+                                                key={it.id}
+                                                className={[
+                                                    "grid cursor-pointer select-none",
+                                                    idx % 2 === 0 ? "bg-zinc-950/30" : "bg-zinc-950/10",
+                                                    "hover:bg-white/5",
+                                                ].join(" ")}
+                                                style={{ gridTemplateColumns: gridCols }}
+                                                onClick={() => openDetail(it)}
+                                            >
+                                                <div className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={selected.has(it.id)}
+                                                        onChange={() => toggleSelect(it.id)}
+                                                        className="h-4 w-4 rounded border-white/20 bg-transparent accent-white"
+                                                    />
+                                                </div>
 
-                                    const itemCur = (it.currency || "GBP").toUpperCase()
-                                    const q = Number(it.quantity) || 0
-                                    const purchase = Number(it.purchasePence) || 0
-                                    const best =
-                                        it.expectedBestPence === null || it.expectedBestPence === undefined
-                                            ? null
-                                            : Number(it.expectedBestPence)
-                                    const worst =
-                                        it.expectedWorstPence === null || it.expectedWorstPence === undefined
-                                            ? null
-                                            : Number(it.expectedWorstPence)
+                                                <div className="px-4 py-3 text-sm text-zinc-200">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="font-semibold text-white">{it.name}</span>
+                                                    </div>
+                                                    <div className="mt-1 text-[11px] text-zinc-400">
+                                                        {(c.meta.category || "—") + " • " + (c.meta.condition || "—")}
+                                                    </div>
+                                                </div>
 
-                                    const purchaseView = convertMinor(purchase, itemCur, currencyView, fx.rates).value
-                                    const bestView = best === null ? null : convertMinor(best, itemCur, currencyView, fx.rates).value
-                                    const worstView = worst === null ? null : convertMinor(worst, itemCur, currencyView, fx.rates).value
+                                                {columns.sku ? <div className="px-4 py-3 text-sm text-zinc-200">{it.sku ?? "—"}</div> : null}
+                                                {columns.category ? <div className="px-4 py-3 text-sm text-zinc-200">{c.meta.category ?? "—"}</div> : null}
+                                                {columns.condition ? <div className="px-4 py-3 text-sm text-zinc-200">{c.meta.condition ?? "—"}</div> : null}
+                                                {columns.quantity ? <div className="px-4 py-3 text-sm text-zinc-200">{c.q}</div> : null}
+                                                {columns.purchase ? <div className="px-4 py-3 text-sm text-zinc-200">{renderPurchaseTotal(it)}</div> : null}
+                                                {columns.status ? (
+                                                    <div className="px-4 py-3 text-sm text-zinc-200">
+                                                        <Pill text={c.status} />
+                                                    </div>
+                                                ) : null}
+                                                {columns.listings ? <div className="px-4 py-3 text-sm text-zinc-200">{renderListingsChips(it)}</div> : null}
+                                                {columns.listingPrice ? <div className="px-4 py-3 text-sm text-zinc-200">{renderListingPrice(it)}</div> : null}
 
-                                    const profitBest = best === null ? null : convertMinor((best - purchase) * q, itemCur, currencyView, fx.rates).value
-                                    const profitWorst = worst === null ? null : convertMinor((worst - purchase) * q, itemCur, currencyView, fx.rates).value
-
-                                    return (
-                                        <tr key={it.id} className={rowBg}>
-                                            <td className="px-4 py-3">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={selected.has(it.id)}
-                                                    onChange={() => toggleSelect(it.id)}
-                                                    className="h-4 w-4 rounded border-white/20 bg-transparent accent-white"
-                                                />
-                                            </td>
-
-                                            <td className="px-4 py-3 font-semibold text-white">{it.name}</td>
-                                            <td className="px-4 py-3 text-zinc-200">{it.sku ?? "—"}</td>
-                                            <td className="px-4 py-3 text-zinc-200">{it.category}</td>
-                                            <td className="px-4 py-3 text-zinc-200">{it.condition}</td>
-                                            <td className="px-4 py-3 text-zinc-200">{q}</td>
-
-                                            <td className="px-4 py-3 text-zinc-200">
-                                                {fmt(currencyView, purchaseView)}
-                                            </td>
-
-                                            <td className="px-4 py-3 text-zinc-200">
-                                                {worstView === null && bestView === null
-                                                    ? "—"
-                                                    : `${worstView === null ? "—" : fmt(currencyView, worstView)} → ${bestView === null ? "—" : fmt(currencyView, bestView)
-                                                    }`}
-                                            </td>
-
-                                            <td className="px-4 py-3 text-zinc-200">
-                                                {profitWorst === null && profitBest === null
-                                                    ? "—"
-                                                    : `${profitWorst === null ? "—" : fmt(currencyView, profitWorst)} → ${profitBest === null ? "—" : fmt(currencyView, profitBest)
-                                                    }`}
-                                            </td>
-
-                                            <td className="px-4 py-3 text-right">
-                                                <span className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-1 text-xs font-semibold text-zinc-200">
-                                                    {itemCur}
-                                                    <span className="text-zinc-400">•</span>
-                                                    <span className="text-zinc-200">{fmt(itemCur, purchase)}</span>
-                                                </span>
-                                            </td>
-                                        </tr>
-                                    )
-                                })}
-                            </tbody>
-                        </table>
+                                                <div className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => singleDelete(it.id)}
+                                                        className="rounded-2xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-100 hover:bg-red-500/15"
+                                                    >
+                                                        Delete
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-zinc-400">
-                        <div>
-                            {fx.nextUpdateUtc ? `FX next update: ${fx.nextUpdateUtc}` : "FX next update: —"}
-                        </div>
-
+                        <div>{fx.nextUpdateUtc ? `FX next update: ${fx.nextUpdateUtc}` : "FX next update: —"}</div>
                         <div className="flex items-center gap-2">
                             <span>Attribution:</span>
                             <span
@@ -521,179 +906,480 @@ export default function InventoryPage() {
                 </div>
             </div>
 
-            {isModalOpen ? (
-                <div className="fixed inset-0 z-50 flex items-end justify-center p-4 sm:items-center">
-                    <button aria-label="Close" onClick={() => setIsModalOpen(false)} className="absolute inset-0 bg-black/70" />
-                    <div className="relative w-full max-w-2xl rounded-3xl border border-white/10 bg-zinc-950/90 p-5 shadow-2xl backdrop-blur">
-                        <div className="mb-4 flex items-start justify-between gap-4">
-                            <div>
-                                <div className="text-lg font-semibold text-white">Add item</div>
-                                <div className="text-xs text-zinc-300">Prices are per unit (minor units).</div>
-                            </div>
+            {/* COLUMNS MODAL */}
+            {columnsOpen ? (
+                <Modal
+                    title="Customise columns"
+                    onClose={() => setColumnsOpen(false)}
+                    maxWidth="max-w-2xl"
+                    footer={
+                        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
                             <button
-                                onClick={() => setIsModalOpen(false)}
-                                className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10"
+                                type="button"
+                                onClick={() => setColumns(DEFAULT_COLUMNS)}
+                                className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
                             >
-                                Close
+                                Reset to default
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setColumnsOpen(false)}
+                                className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100"
+                            >
+                                Done
                             </button>
                         </div>
-
-                        <form onSubmit={submitCreate} className="grid gap-3 md:grid-cols-2">
-                            <Field label="Title">
+                    }
+                >
+                    <div className="grid gap-3 sm:grid-cols-2">
+                        {COLUMN_DEFS.map((d) => (
+                            <label
+                                key={d.key}
+                                className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 hover:bg-white/10"
+                            >
+                                <div className="text-sm font-semibold text-white">{d.label}</div>
                                 <input
-                                    value={form.name}
-                                    onChange={onFormChange("name")}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none focus:border-white/25"
-                                    placeholder="e.g. Air Max 95"
+                                    type="checkbox"
+                                    checked={!!columns[d.key]}
+                                    onChange={() => setColumns((p) => ({ ...p, [d.key]: !p[d.key] }))}
+                                    className="h-4 w-4 rounded border-white/20 bg-transparent accent-white"
                                 />
-                            </Field>
-
-                            <Field label="SKU (optional)">
-                                <input
-                                    value={form.sku}
-                                    onChange={onFormChange("sku")}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none focus:border-white/25"
-                                    placeholder="e.g. AM95-BLK-01"
-                                />
-                            </Field>
-
-                            <Field label="Category">
-                                <select
-                                    value={form.category}
-                                    onChange={onFormChange("category")}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none"
-                                >
-                                    {CATEGORIES.map(([v, label]) => (
-                                        <option key={v} value={v}>
-                                            {label}
-                                        </option>
-                                    ))}
-                                </select>
-                            </Field>
-
-                            <Field label="Condition">
-                                <select
-                                    value={form.condition}
-                                    onChange={onFormChange("condition")}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none"
-                                >
-                                    {CONDITIONS.map(([v, label]) => (
-                                        <option key={v} value={v}>
-                                            {label}
-                                        </option>
-                                    ))}
-                                </select>
-                            </Field>
-
-                            <Field label="Quantity">
-                                <input
-                                    type="number"
-                                    min={0}
-                                    value={form.quantity}
-                                    onChange={onFormChange("quantity")}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none"
-                                />
-                            </Field>
-
-                            <Field label="Original currency">
-                                <select
-                                    value={form.currency}
-                                    onChange={onFormChange("currency")}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none"
-                                >
-                                    {Object.keys(CURRENCY_META).map((c) => (
-                                        <option key={c} value={c}>
-                                            {c}
-                                        </option>
-                                    ))}
-                                </select>
-                            </Field>
-
-                            <Field label="Purchase price (minor units)">
-                                <input
-                                    type="number"
-                                    min={0}
-                                    value={form.purchasePence}
-                                    onChange={onFormChange("purchasePence")}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none"
-                                />
-                            </Field>
-
-                            <Field label="Expected sale (best) (minor units)">
-                                <input
-                                    type="number"
-                                    min={0}
-                                    value={form.expectedBestPence}
-                                    onChange={onFormChange("expectedBestPence")}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none"
-                                />
-                            </Field>
-
-                            <Field label="Expected sale (worst) (minor units)">
-                                <input
-                                    type="number"
-                                    min={0}
-                                    value={form.expectedWorstPence}
-                                    onChange={onFormChange("expectedWorstPence")}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none"
-                                />
-                            </Field>
-
-                            <Field label="Notes (optional)" className="md:col-span-2">
-                                <textarea
-                                    value={form.notes}
-                                    onChange={onFormChange("notes")}
-                                    className="min-h-[96px] w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-3 py-2 text-sm text-white outline-none"
-                                    placeholder="Size, colour, supplier, defects, etc."
-                                />
-                            </Field>
-
-                            <div className="md:col-span-2 mt-2 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                                <button
-                                    type="button"
-                                    onClick={() => setIsModalOpen(false)}
-                                    className="h-11 rounded-2xl border border-white/10 bg-transparent px-5 text-sm font-semibold text-white/90 hover:bg-white/5"
-                                >
-                                    Cancel
-                                </button>
-
-                                <button
-                                    type="submit"
-                                    disabled={submitting}
-                                    className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-100 disabled:opacity-60"
-                                >
-                                    {submitting ? "Saving…" : "Save item"}
-                                </button>
-                            </div>
-
-                            <div className="md:col-span-2 mt-1 text-xs text-zinc-300">
-                                Preview (original): purchase {fmt(form.currency, Number(form.purchasePence) || 0)} • best{" "}
-                                {form.expectedBestPence === "" ? "—" : fmt(form.currency, Number(form.expectedBestPence) || 0)} • worst{" "}
-                                {form.expectedWorstPence === "" ? "—" : fmt(form.currency, Number(form.expectedWorstPence) || 0)}
-                            </div>
-                        </form>
+                            </label>
+                        ))}
                     </div>
-                </div>
+                    <div className="mt-4 text-xs text-zinc-300">
+                        Tip: enable <span className="font-semibold text-white">Listings</span> to show all listing links as chips in the table.
+                    </div>
+                </Modal>
+            ) : null}
+
+            {/* ADD MODAL */}
+            {addOpen ? (
+                <Modal
+                    title="Add item"
+                    onClose={() => setAddOpen(false)}
+                    maxWidth="max-w-4xl"
+                    footer={
+                        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                            <button
+                                type="button"
+                                onClick={() => setAddOpen(false)}
+                                className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                form="rt-add-item"
+                                disabled={addSaving}
+                                className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100 disabled:opacity-60"
+                            >
+                                {addSaving ? "Saving…" : "Create"}
+                            </button>
+                        </div>
+                    }
+                >
+                    <div className="mb-4">
+                        <SectionTabs
+                            value={addTab}
+                            onChange={setAddTab}
+                            tabs={[
+                                { value: "BASIC", label: "Basic" },
+                                { value: "FINANCE", label: "Finance" },
+                                ...(showListingFieldsInAdd ? [{ value: "LISTING", label: "Listing" }] : []),
+                            ]}
+                        />
+                    </div>
+
+                    <form id="rt-add-item" onSubmit={submitAdd} className="space-y-4">
+                        {addTab === "BASIC" ? (
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <Field label="Title *">
+                                    <input
+                                        value={addForm.title}
+                                        onChange={(e) => onAddChange({ title: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                        placeholder="e.g. Nike Air Max 95"
+                                        autoFocus
+                                    />
+                                </Field>
+
+                                <Field label="SKU (optional)">
+                                    <input
+                                        value={addForm.sku}
+                                        onChange={(e) => onAddChange({ sku: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                        placeholder="e.g. AM95-001"
+                                    />
+                                </Field>
+
+                                <Field label="Quantity (units)">
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        value={addForm.quantity}
+                                        onChange={(e) => onAddChange({ quantity: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    />
+                                </Field>
+
+                                <Field label="Status">
+                                    <select
+                                        value={addForm.status}
+                                        onChange={(e) => onAddChange({ status: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    >
+                                        {STATUSES.map(([v, l]) => (
+                                            <option key={v} value={v}>
+                                                {l}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </Field>
+
+                                <Field label="Category">
+                                    <select
+                                        value={addForm.category}
+                                        onChange={(e) => onAddChange({ category: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    >
+                                        {CATEGORIES.map((c) => (
+                                            <option key={c} value={c}>
+                                                {c}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </Field>
+
+                                <Field label="Condition">
+                                    <select
+                                        value={addForm.condition}
+                                        onChange={(e) => onAddChange({ condition: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    >
+                                        {CONDITIONS.map((c) => (
+                                            <option key={c} value={c}>
+                                                {c}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </Field>
+
+                                <Field label="Notes" className="md:col-span-2">
+                                    <textarea
+                                        value={addForm.notes}
+                                        onChange={(e) => onAddChange({ notes: e.target.value })}
+                                        className="min-h-[110px] w-full resize-none rounded-2xl border border-white/10 bg-zinc-950/60 px-4 py-3 text-sm text-white outline-none focus:border-white/20"
+                                        placeholder="Anything useful…"
+                                    />
+                                </Field>
+                            </div>
+                        ) : null}
+
+                        {addTab === "FINANCE" ? (
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <Card title={`Finance (${currencyView})`}>
+                                    <div className="grid gap-4 md:grid-cols-2">
+                                        <Field label="Total purchase price (all-in) per unit">
+                                            <input
+                                                inputMode="decimal"
+                                                value={addForm.purchaseTotal}
+                                                onChange={(e) => onAddChange({ purchaseTotal: e.target.value })}
+                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                                placeholder="0.00"
+                                            />
+                                        </Field>
+
+                                        <Field label="Expected best sale per unit">
+                                            <input
+                                                inputMode="decimal"
+                                                value={addForm.expectedBest}
+                                                onChange={(e) => onAddChange({ expectedBest: e.target.value })}
+                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                                placeholder="0.00"
+                                            />
+                                        </Field>
+
+                                        <Field label="Expected worst sale per unit" className="md:col-span-2">
+                                            <input
+                                                inputMode="decimal"
+                                                value={addForm.expectedWorst}
+                                                onChange={(e) => onAddChange({ expectedWorst: e.target.value })}
+                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                                placeholder="0.00"
+                                            />
+                                        </Field>
+                                    </div>
+
+                                    <div className="mt-4 rounded-2xl border border-white/10 bg-zinc-950/30 p-4">
+                                        <div className="text-xs font-semibold text-zinc-300">Quick snapshot</div>
+                                        <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                                            <Snapshot label="Total cost" value={fmt(currencyView, parseMoneyToPence(addForm.purchaseTotal) * safeInt(addForm.quantity, 0))} />
+                                            <Snapshot
+                                                label="Best profit"
+                                                value={fmt(
+                                                    currencyView,
+                                                    (parseMoneyToPence(addForm.expectedBest) - parseMoneyToPence(addForm.purchaseTotal)) * safeInt(addForm.quantity, 0)
+                                                )}
+                                                good
+                                            />
+                                            <Snapshot
+                                                label="Worst profit"
+                                                value={fmt(
+                                                    currencyView,
+                                                    (parseMoneyToPence(addForm.expectedWorst) - parseMoneyToPence(addForm.purchaseTotal)) * safeInt(addForm.quantity, 0)
+                                                )}
+                                            />
+                                        </div>
+                                        <div className="mt-2 text-[11px] text-zinc-400">Fees and sold breakdown can come later.</div>
+                                    </div>
+                                </Card>
+
+                                <Card title="Finance notes">
+                                    <ul className="space-y-2 text-sm text-zinc-300">
+                                        <li>• Purchase is all-in per unit (what it actually cost you).</li>
+                                        <li>• Expected best and worst are your range per unit.</li>
+                                        <li>• Display currency is global; values convert using FX.</li>
+                                    </ul>
+                                </Card>
+                            </div>
+                        ) : null}
+
+                        {addTab === "LISTING" && showListingFieldsInAdd ? (
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <Card title="Add listing link(s)">
+                                    <div className="grid gap-4 md:grid-cols-2">
+                                        <Field label="Platform">
+                                            <select
+                                                value={addForm.listingPlatform}
+                                                onChange={(e) => onAddChange({ listingPlatform: e.target.value })}
+                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                            >
+                                                {PLATFORMS.filter(([v]) => v !== "NONE").map(([v, l]) => (
+                                                    <option key={v} value={v}>
+                                                        {l}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </Field>
+
+                                        <Field label="Listing link (URL)">
+                                            <input
+                                                value={addForm.listingUrl}
+                                                onChange={(e) => onAddChange({ listingUrl: e.target.value })}
+                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                                placeholder="https://…"
+                                            />
+                                        </Field>
+
+                                        <Field label="Listing price per unit (optional)">
+                                            <input
+                                                inputMode="decimal"
+                                                value={addForm.listingPrice}
+                                                onChange={(e) => onAddChange({ listingPrice: e.target.value })}
+                                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                                placeholder="0.00"
+                                            />
+                                        </Field>
+
+                                        <div className="flex items-end">
+                                            <button
+                                                type="button"
+                                                onClick={addListingToForm}
+                                                className="h-11 w-full rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white hover:bg-white/15"
+                                            >
+                                                Add link
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-4 space-y-2">
+                                        {(Array.isArray(addForm.listings) ? addForm.listings : []).length === 0 ? (
+                                            <div className="text-sm text-zinc-300">No links added yet.</div>
+                                        ) : (
+                                            (addForm.listings || []).map((l, idx) => {
+                                                const href = linkify(l.url)
+                                                return (
+                                                    <div
+                                                        key={`${l.platform}-${idx}`}
+                                                        className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-zinc-950/30 p-3 sm:flex-row sm:items-center sm:justify-between"
+                                                    >
+                                                        <div className="min-w-0">
+                                                            <div className="text-sm font-semibold text-white">{l.platform}</div>
+                                                            <a
+                                                                href={href}
+                                                                target="_blank"
+                                                                rel="noreferrer"
+                                                                className="block truncate text-xs text-zinc-300 underline underline-offset-2 hover:text-white"
+                                                            >
+                                                                {href}
+                                                            </a>
+                                                            <div className="mt-1 text-xs text-zinc-400">
+                                                                Price: {l.pricePence == null ? "—" : fmt(currencyView, l.pricePence)}
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => removeListingFromForm(idx)}
+                                                            className="h-10 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 text-sm font-semibold text-red-100 hover:bg-red-500/15"
+                                                        >
+                                                            Remove
+                                                        </button>
+                                                    </div>
+                                                )
+                                            })
+                                        )}
+                                    </div>
+                                </Card>
+
+                                <Card title="Tip">
+                                    <div className="text-sm text-zinc-300">
+                                        You can add multiple listing links across platforms. Enable the <span className="font-semibold text-white">Listings</span>{" "}
+                                        column to show them in the table.
+                                    </div>
+                                </Card>
+                            </div>
+                        ) : null}
+                    </form>
+                </Modal>
+            ) : null}
+
+            {/* DETAIL MODAL */}
+            {detailOpen && detailItem ? (
+                <Modal
+                    title={detailItem.name}
+                    onClose={() => {
+                        setDetailOpen(false)
+                        setDetailItem(null)
+                    }}
+                    maxWidth="max-w-5xl"
+                    footer={
+                        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+                            <button
+                                type="button"
+                                onClick={() => singleDelete(detailItem.id)}
+                                className="h-11 rounded-2xl border border-red-400/20 bg-red-500/10 px-5 text-sm font-semibold text-red-100 hover:bg-red-500/15"
+                            >
+                                Delete
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => showToast("error", "Edit (PATCH) next.")}
+                                className="h-11 rounded-2xl border border-white/10 bg-white/10 px-5 text-sm font-semibold text-white hover:bg-white/15"
+                            >
+                                Edit
+                            </button>
+                        </div>
+                    }
+                >
+                    <DetailPanel item={detailItem} currencyView={currencyView} rates={fx.rates} />
+                </Modal>
             ) : null}
         </div>
     )
 }
 
-function StatCard({ label, value, sub }) {
+function Snapshot({ label, value, good = false }) {
     return (
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-5 shadow-lg backdrop-blur">
-            <div className="text-xs font-semibold uppercase tracking-wide text-zinc-300">{label}</div>
-            <div className="mt-2 text-3xl font-semibold text-white">{value}</div>
-            <div className="mt-1 text-xs text-zinc-300">{sub}</div>
+        <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+            <div className="text-[11px] font-semibold text-zinc-300">{label}</div>
+            <div className={["mt-1 text-sm font-semibold", good ? "text-emerald-200" : "text-white"].join(" ")}>{value}</div>
         </div>
     )
 }
 
-function Field({ label, children, className = "" }) {
+function DetailPanel({ item, currencyView, rates }) {
+    const c = compute(item)
+    const toView = (minor) => fmt(currencyView, convertMinor(minor, c.itemCur, currencyView, rates).value)
+    const showListing = c.status === "LISTED" || c.status === "SOLD"
+
+    const bestProfit =
+        c.profitBestTotal == null ? null : convertMinor(c.profitBestTotal, c.itemCur, currencyView, rates).value
+    const worstProfit =
+        c.profitWorstTotal == null ? null : convertMinor(c.profitWorstTotal, c.itemCur, currencyView, rates).value
+
     return (
-        <div className={["space-y-1", className].join(" ")}>
-            <label className="text-xs font-semibold text-zinc-200">{label}</label>
-            {children}
+        <div className="grid gap-4 md:grid-cols-2">
+            <Card title="Item">
+                <Row label="Status" value={<Pill text={c.status} />} />
+                <Row label="Category" value={c.meta.category || "—"} />
+                <Row label="Condition" value={c.meta.condition || "—"} />
+                <Row label="Quantity" value={c.q} />
+                <Row label="SKU" value={item.sku ?? "—"} />
+            </Card>
+
+            <Card title={`Finance (${currencyView})`}>
+                <Row label="Total purchase" value={toView(c.purchaseTotal)} />
+                <Row label="Expected best total" value={c.meta.expectedBestPence == null ? "—" : toView(c.meta.expectedBestPence * c.q)} />
+                <Row label="Expected worst total" value={c.meta.expectedWorstPence == null ? "—" : toView(c.meta.expectedWorstPence * c.q)} />
+                <Row
+                    label="Best profit"
+                    value={
+                        bestProfit == null ? (
+                            "—"
+                        ) : (
+                            <span className={bestProfit >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>
+                                {fmt(currencyView, bestProfit)}
+                            </span>
+                        )
+                    }
+                />
+                <Row
+                    label="Worst profit"
+                    value={
+                        worstProfit == null ? (
+                            "—"
+                        ) : (
+                            <span className={worstProfit >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>
+                                {fmt(currencyView, worstProfit)}
+                            </span>
+                        )
+                    }
+                />
+            </Card>
+
+            <Card title="Listing links" className="md:col-span-2">
+                {!showListing ? (
+                    <div className="text-sm text-zinc-300">Not listed. Listing links appear when status is Listed or Sold.</div>
+                ) : (c.meta.listings || []).length === 0 ? (
+                    <div className="text-sm text-zinc-300">No listing links added.</div>
+                ) : (
+                    <div className="grid gap-2 md:grid-cols-2">
+                        {(c.meta.listings || []).map((l, idx) => {
+                            const href = linkify(l.url)
+                            const price = l.pricePence == null ? "—" : toView((l.pricePence || 0) * c.q)
+                            return (
+                                <div key={`${l.platform}-${idx}`} className="rounded-2xl border border-white/10 bg-zinc-950/30 p-4">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div className="text-sm font-semibold text-white">{l.platform}</div>
+                                        <div className="text-xs text-zinc-300">Listing: {price}</div>
+                                    </div>
+                                    <a
+                                        href={href}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="mt-2 block truncate text-xs text-zinc-300 underline underline-offset-2 hover:text-white"
+                                        title={href}
+                                    >
+                                        {href}
+                                    </a>
+                                </div>
+                            )
+                        })}
+                    </div>
+                )}
+            </Card>
+
+            <Card title="Notes" className="md:col-span-2">
+                <div className="text-sm text-zinc-200 whitespace-pre-wrap">{c.notesPlain || "—"}</div>
+            </Card>
+
+            <Card title="Meta" className="md:col-span-2">
+                <Row label="ID" value={<code className="rounded bg-white/5 px-2 py-1 text-xs">{item.id}</code>} />
+                <Row label="Created" value={item.createdAt ? new Date(item.createdAt).toLocaleString() : "—"} />
+                <Row label="Updated" value={item.updatedAt ? new Date(item.updatedAt).toLocaleString() : "—"} />
+            </Card>
         </div>
     )
 }

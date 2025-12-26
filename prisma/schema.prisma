@@ -1,4 +1,5 @@
 // FILE: prisma/schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -40,6 +41,25 @@ enum ItemCategory {
   OTHER
 }
 
+enum ItemStatus {
+  UNLISTED
+  LISTED
+  SOLD
+}
+
+enum SellingPlatform {
+  NONE
+  EBAY
+  VINTED
+  DEPOP
+  STOCKX
+  GOAT
+  GRAILED
+  FACEBOOK
+  ETSY
+  OTHER
+}
+
 model Item {
   id        String   @id @default(cuid())
   userId    String
@@ -48,12 +68,32 @@ model Item {
   sku       String?
   quantity  Int      @default(1)
 
-  // prices stored in pence (minor units) for the chosen currency
   currency          Currency      @default(GBP)
-  purchasePence     Int           @default(0)  // what you paid (per unit)
 
-  expectedBestPence Int?          // expected sale best (per unit)
-  expectedWorstPence Int?         // expected sale worst (per unit)
+  // YOUR TOTAL COST BASIS (per unit, all-in)
+  // purchaseSubtotal = item price you paid
+  // purchaseFees = payment fees etc
+  // purchaseShipping = postage you paid
+  purchaseSubtotalPence Int @default(0)
+  purchaseFeesPence     Int @default(0)
+  purchaseShippingPence Int @default(0)
+
+  // LISTING / SELLING
+  status   ItemStatus      @default(UNLISTED)
+  platform SellingPlatform @default(NONE)
+
+  listedPricePence        Int?      // price shown on listing (per unit)
+  buyerTotalPence         Int?      // total buyer pays (incl buyer postage etc) (per unit)
+  soldAt  DateTime?
+
+  // FEES (per unit)
+  platformFeePence        Int?      // platform fee
+  paymentProcessingFeePence Int?    // stripe/paypal etc
+  postageChargedToBuyerPence Int?   // the shipping buyer paid (if tracked separately)
+
+  // EXPECTED RANGE (optional) (per unit)
+  expectedBestPence  Int?
+  expectedWorstPence Int?
 
   condition ItemCondition @default(GOOD)
   category  ItemCategory  @default(OTHER)
@@ -63,6 +103,7 @@ model Item {
   updatedAt DateTime @updatedAt
 
   @@index([userId])
+  @@index([userId, status])
   @@index([userId, category])
   @@index([userId, condition])
 

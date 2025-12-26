@@ -3,22 +3,26 @@ import { NextResponse } from "next/server"
 import { currentUser } from "@clerk/nextjs/server"
 import { prisma } from "../../lib/prisma"
 
-const CURRENCIES = new Set(["GBP", "USD", "EUR", "CAD", "AUD", "JPY"])
-const CONDITIONS = new Set(["NEW", "LIKE_NEW", "GOOD", "FAIR", "POOR"])
-const CATEGORIES = new Set([
-    "CLOTHING",
-    "SHOES",
-    "TECH",
-    "COLLECTIBLES",
-    "TRADING_CARDS",
-    "WATCHES",
-    "BAGS",
-    "HOME",
-    "BOOKS",
-    "TOYS",
-    "BEAUTY",
-    "OTHER",
-])
+const SETS = {
+    Currency: new Set(["GBP", "USD", "EUR", "CAD", "AUD", "JPY"]),
+    ItemCondition: new Set(["NEW", "LIKE_NEW", "GOOD", "FAIR", "POOR"]),
+    ItemCategory: new Set([
+        "CLOTHING",
+        "SHOES",
+        "TECH",
+        "COLLECTIBLES",
+        "TRADING_CARDS",
+        "WATCHES",
+        "BAGS",
+        "HOME",
+        "BOOKS",
+        "TOYS",
+        "BEAUTY",
+        "OTHER",
+    ]),
+    ItemStatus: new Set(["UNLISTED", "LISTED", "SOLD"]),
+    SellingPlatform: new Set(["NONE", "EBAY", "VINTED", "DEPOP", "STOCKX", "GOAT", "GRAILED", "FACEBOOK", "ETSY", "OTHER"]),
+}
 
 const int0 = (v, def = 0) => {
     const n = Number(v)
@@ -56,17 +60,33 @@ export async function POST(req) {
     const quantity = int0(body?.quantity, 1)
 
     const currency = String(body?.currency ?? "GBP").toUpperCase()
-    if (!CURRENCIES.has(currency)) return NextResponse.json({ error: "Invalid currency" }, { status: 400 })
+    if (!SETS.Currency.has(currency)) return NextResponse.json({ error: "Invalid currency" }, { status: 400 })
 
-    const purchasePence = int0(body?.purchasePence, 0)
+    const purchaseSubtotalPence = int0(body?.purchaseSubtotalPence, 0)
+    const purchaseFeesPence = int0(body?.purchaseFeesPence, 0)
+    const purchaseShippingPence = int0(body?.purchaseShippingPence, 0)
+
+    const status = String(body?.status ?? "UNLISTED").toUpperCase()
+    if (!SETS.ItemStatus.has(status)) return NextResponse.json({ error: "Invalid status" }, { status: 400 })
+
+    const platform = String(body?.platform ?? "NONE").toUpperCase()
+    if (!SETS.SellingPlatform.has(platform)) return NextResponse.json({ error: "Invalid platform" }, { status: 400 })
+
+    const listedPricePence = maybeInt0(body?.listedPricePence)
+    const buyerTotalPence = maybeInt0(body?.buyerTotalPence)
+
+    const platformFeePence = maybeInt0(body?.platformFeePence)
+    const paymentProcessingFeePence = maybeInt0(body?.paymentProcessingFeePence)
+    const postageChargedToBuyerPence = maybeInt0(body?.postageChargedToBuyerPence)
+
     const expectedBestPence = maybeInt0(body?.expectedBestPence)
     const expectedWorstPence = maybeInt0(body?.expectedWorstPence)
 
     const condition = String(body?.condition ?? "GOOD").toUpperCase()
-    if (!CONDITIONS.has(condition)) return NextResponse.json({ error: "Invalid condition" }, { status: 400 })
+    if (!SETS.ItemCondition.has(condition)) return NextResponse.json({ error: "Invalid condition" }, { status: 400 })
 
     const category = String(body?.category ?? "OTHER").toUpperCase()
-    if (!CATEGORIES.has(category)) return NextResponse.json({ error: "Invalid category" }, { status: 400 })
+    if (!SETS.ItemCategory.has(category)) return NextResponse.json({ error: "Invalid category" }, { status: 400 })
 
     const notes = body?.notes ? String(body.notes) : null
 
@@ -77,7 +97,19 @@ export async function POST(req) {
             sku,
             quantity,
             currency,
-            purchasePence,
+
+            purchaseSubtotalPence,
+            purchaseFeesPence,
+            purchaseShippingPence,
+
+            status,
+            platform,
+            listedPricePence,
+            buyerTotalPence,
+            platformFeePence,
+            paymentProcessingFeePence,
+            postageChargedToBuyerPence,
+
             expectedBestPence,
             expectedWorstPence,
             condition,
