@@ -93,6 +93,7 @@ export default function Navbar() {
     }
 
     const isHome = pathname === "/"
+    const showCta = isHome
 
     return (
         <>
@@ -140,12 +141,14 @@ export default function Navbar() {
                                 Sign in
                             </Link>
 
-                            <Link
-                                href="/signup"
-                                className="inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold text-black bg-white hover:bg-white/90 transition shadow-[0_10px_30px_rgba(255,255,255,0.12)]"
-                            >
-                                Get started
-                            </Link>
+                            {showCta ? (
+                                <Link
+                                    href="/signup"
+                                    className="inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold text-black bg-white hover:bg-white/90 transition shadow-[0_10px_30px_rgba(255,255,255,0.12)]"
+                                >
+                                    Get started
+                                </Link>
+                            ) : null}
                         </div>
 
                         <button
@@ -216,7 +219,7 @@ export default function Navbar() {
                                 })}
                             </div>
 
-                            <div className="mt-3 grid grid-cols-2 gap-2">
+                            <div className={cx("mt-3 grid gap-2", showCta ? "grid-cols-2" : "grid-cols-1")}>
                                 <Link
                                     href="/login"
                                     onClick={() => setOpen(false)}
@@ -224,13 +227,16 @@ export default function Navbar() {
                                 >
                                     Sign in
                                 </Link>
-                                <Link
-                                    href="/signup"
-                                    onClick={() => setOpen(false)}
-                                    className="inline-flex items-center justify-center rounded-xl px-4 py-3 text-sm font-semibold text-black bg-white hover:bg-white/90 transition"
-                                >
-                                    Get started
-                                </Link>
+
+                                {showCta ? (
+                                    <Link
+                                        href="/signup"
+                                        onClick={() => setOpen(false)}
+                                        className="inline-flex items-center justify-center rounded-xl px-4 py-3 text-sm font-semibold text-black bg-white hover:bg-white/90 transition"
+                                    >
+                                        Get started
+                                    </Link>
+                                ) : null}
                             </div>
 
                             <div className="mt-3 text-center text-xs text-white/55">14-day free trial. No card needed.</div>

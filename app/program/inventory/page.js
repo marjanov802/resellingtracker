@@ -302,6 +302,39 @@ function TrashIcon({ className = "" }) {
     )
 }
 
+function CheckIcon({ className = "" }) {
+    return (
+        <svg viewBox="0 0 24 24" className={["h-4 w-4", className].join(" ")} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20 6 9 17l-5-5" />
+        </svg>
+    )
+}
+
+function TickButton({ checked, onToggle, title, disabled = false, className = "" }) {
+    return (
+        <button
+            type="button"
+            title={title}
+            aria-label={title}
+            disabled={disabled}
+            onClick={(e) => {
+                e?.preventDefault?.()
+                e?.stopPropagation?.()
+                if (disabled) return
+                onToggle?.()
+            }}
+            className={[
+                "inline-flex h-7 w-7 items-center justify-center rounded-xl border transition",
+                checked ? "border-white/10 bg-white text-zinc-950" : "border-white/10 bg-white/10 text-white/90 hover:bg-white/15",
+                disabled ? "opacity-50 cursor-not-allowed hover:bg-white/10" : "",
+                className,
+            ].join(" ")}
+        >
+            {checked ? <CheckIcon /> : null}
+        </button>
+    )
+}
+
 // Max 6 visible columns by default (no horizontal scroll)
 const DEFAULT_COLUMNS = {
     status: true,
@@ -498,10 +531,18 @@ export default function InventoryPage() {
             const res = await fetch("/api/items", { cache: "no-store" })
             const data = await res.json().catch(() => null)
             if (!res.ok) throw new Error(data?.error || `Failed to load (${res.status})`)
-            setItems(Array.isArray(data) ? data : [])
+            const arr = Array.isArray(data) ? data : []
+            setItems(arr)
+            setSelected((prev) => {
+                const allowed = new Set(arr.map((x) => x.id))
+                const next = new Set()
+                for (const id of prev) if (allowed.has(id)) next.add(id)
+                return next
+            })
         } catch (e) {
             showToast("error", e?.message || "Failed to load items")
             setItems([])
+            setSelected(new Set())
         } finally {
             setLoading(false)
         }
@@ -898,6 +939,21 @@ export default function InventoryPage() {
         })
     }, [items, search, filters])
 
+    const visibleIds = useMemo(() => filteredItems.map((x) => x.id), [filteredItems])
+    const allVisibleSelected = useMemo(() => visibleIds.length > 0 && visibleIds.every((id) => selected.has(id)), [visibleIds, selected])
+
+    const toggleSelectAllVisible = () => {
+        setSelected((prev) => {
+            const next = new Set(prev)
+            if (allVisibleSelected) {
+                for (const id of visibleIds) next.delete(id)
+            } else {
+                for (const id of visibleIds) next.add(id)
+            }
+            return next
+        })
+    }
+
     const totals = useMemo(() => {
         const rowCount = filteredItems.length
         const unitCount = filteredItems.reduce((a, it) => a + (Number(it.quantity) || 0), 0)
@@ -1075,19 +1131,13 @@ export default function InventoryPage() {
                 <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
                     <div>
                         <h1 className="text-3xl font-semibold tracking-tight">Inventory</h1>
-                        <p className="mt-1 text-sm text-zinc-300">
-                            Estimated sale is used for Unlisted. Listing price is used for Listed and Sold. Both show in the same Sale price column.
-                        </p>
+                        <p className="mt-1 text-sm text-zinc-300">Estimated sale is used for Unlisted. Listing price is used for Listed and Sold. Both show in the same Sale price column.</p>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
                         <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
                             <div className="text-xs font-semibold text-zinc-300">Display</div>
-                            <select
-                                value={currencyView}
-                                onChange={(e) => setCurrencyView(e.target.value)}
-                                className="h-9 rounded-xl border border-white/10 bg-zinc-950/60 px-2 text-sm text-white outline-none"
-                            >
+                            <select value={currencyView} onChange={(e) => setCurrencyView(e.target.value)} className="h-9 rounded-xl border border-white/10 bg-zinc-950/60 px-2 text-sm text-white outline-none">
                                 {Object.keys(CURRENCY_META).map((c) => (
                                     <option key={c} value={c}>
                                         {c}
@@ -1095,12 +1145,7 @@ export default function InventoryPage() {
                                 ))}
                             </select>
 
-                            <button
-                                type="button"
-                                onClick={loadFx}
-                                className="h-9 rounded-xl border border-white/10 bg-white/10 px-3 text-xs font-semibold text-white/90 hover:bg-white/15"
-                                title="Refresh exchange rates"
-                            >
+                            <button type="button" onClick={loadFx} className="h-9 rounded-xl border border-white/10 bg-white/10 px-3 text-xs font-semibold text-white/90 hover:bg-white/15" title="Refresh exchange rates">
                                 {fx.loading ? "FX…" : "FX"}
                             </button>
                         </div>
@@ -1113,37 +1158,21 @@ export default function InventoryPage() {
                                 placeholder="Search title, SKU, category, condition, notes…"
                             />
                             {search ? (
-                                <button
-                                    type="button"
-                                    onClick={() => setSearch("")}
-                                    className="h-9 rounded-xl border border-white/10 bg-white/10 px-3 text-xs font-semibold text-white/90 hover:bg-white/15"
-                                >
+                                <button type="button" onClick={() => setSearch("")} className="h-9 rounded-xl border border-white/10 bg-white/10 px-3 text-xs font-semibold text-white/90 hover:bg-white/15">
                                     Clear
                                 </button>
                             ) : null}
                         </div>
 
-                        <button
-                            type="button"
-                            onClick={() => setFiltersOpen(true)}
-                            className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15"
-                        >
+                        <button type="button" onClick={() => setFiltersOpen(true)} className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15">
                             Filters{filtersCount ? ` (${filtersCount})` : ""}
                         </button>
 
-                        <button
-                            type="button"
-                            onClick={() => setColumnsOpen(true)}
-                            className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15"
-                        >
+                        <button type="button" onClick={() => setColumnsOpen(true)} className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15">
                             Columns
                         </button>
 
-                        <button
-                            type="button"
-                            onClick={loadItems}
-                            className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15"
-                        >
+                        <button type="button" onClick={loadItems} className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15">
                             Refresh
                         </button>
 
@@ -1155,12 +1184,7 @@ export default function InventoryPage() {
 
                 {toast.msg ? (
                     <div className="mb-5">
-                        <div
-                            className={[
-                                "rounded-2xl border px-4 py-3 text-sm",
-                                toast.type === "error" ? "border-red-400/20 bg-red-500/10 text-red-100" : "border-emerald-400/20 bg-emerald-500/10 text-emerald-100",
-                            ].join(" ")}
-                        >
+                        <div className={["rounded-2xl border px-4 py-3 text-sm", toast.type === "error" ? "border-red-400/20 bg-red-500/10 text-red-100" : "border-emerald-400/20 bg-emerald-500/10 text-emerald-100"].join(" ")}>
                             {toast.msg}
                         </div>
                     </div>
@@ -1181,25 +1205,8 @@ export default function InventoryPage() {
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2">
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    const visibleIds = filteredItems.map((x) => x.id)
-                                    const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id))
-                                    setSelected((prev) => {
-                                        const next = new Set(prev)
-                                        if (allSelected) visibleIds.forEach((id) => next.delete(id))
-                                        else visibleIds.forEach((id) => next.add(id))
-                                        return next
-                                    })
-                                }}
-                                className="h-10 rounded-2xl border border-white/10 bg-transparent px-4 text-sm font-semibold text-white/90 transition hover:bg-white/5"
-                            >
-                                {(() => {
-                                    const visibleIds = filteredItems.map((x) => x.id)
-                                    const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id))
-                                    return allSelected ? "Clear visible" : "Select visible"
-                                })()}
+                            <button type="button" onClick={toggleSelectAllVisible} className="h-10 rounded-2xl border border-white/10 bg-transparent px-4 text-sm font-semibold text-white/90 transition hover:bg-white/5">
+                                {allVisibleSelected ? "Clear visible" : "Select visible"}
                             </button>
 
                             <button
@@ -1218,32 +1225,20 @@ export default function InventoryPage() {
                             {/* LEFT FIXED: checkbox + TITLE ONLY */}
                             <div className="shrink-0 border-r border-white/10" style={{ width: 380 }}>
                                 <div className={["flex items-center gap-3 border-b border-white/10", HEAD_H, CELL_PAD, HEADER_BG].join(" ")}>
-                                    <div className="w-[20px]" />
+                                    <TickButton checked={allVisibleSelected} onToggle={toggleSelectAllVisible} title={allVisibleSelected ? "Clear visible" : "Select visible"} />
                                     <div className="text-xs font-semibold text-zinc-200">Title</div>
                                 </div>
 
                                 <div className="divide-y divide-white/10">
-                                    {!loading && filteredItems.length === 0 ? (
-                                        <div className={["text-sm text-zinc-300", CELL_PAD, "py-6"].join(" ")}>No items match your filters / search.</div>
-                                    ) : null}
+                                    {!loading && filteredItems.length === 0 ? <div className={["text-sm text-zinc-300", CELL_PAD, "py-6"].join(" ")}>No items match your filters / search.</div> : null}
 
                                     {filteredItems.map((it, idx) => {
                                         const rowBg = idx % 2 === 0 ? "bg-zinc-950" : "bg-zinc-900"
+                                        const checked = selected.has(it.id)
 
                                         return (
-                                            <div
-                                                key={it.id}
-                                                className={["flex items-center gap-3 cursor-pointer", ROW_H, CELL_PAD, CELL_Y, rowBg, "hover:bg-white/5"].join(" ")}
-                                                onClick={() => openDetail(it)}
-                                            >
-                                                <div onClick={(e) => e.stopPropagation()}>
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={selected.has(it.id)}
-                                                        onChange={() => toggleSelect(it.id)}
-                                                        className="h-4 w-4 rounded border-white/20 bg-transparent accent-white"
-                                                    />
-                                                </div>
+                                            <div key={it.id} className={["flex items-center gap-3 cursor-pointer", ROW_H, CELL_PAD, CELL_Y, rowBg, "hover:bg-white/5"].join(" ")} onClick={() => openDetail(it)}>
+                                                <TickButton checked={checked} onToggle={() => toggleSelect(it.id)} title={checked ? "Unselect" : "Select"} />
 
                                                 <div className="min-w-0 w-full">
                                                     <div className="truncate text-[13px] font-semibold text-white">{it.name}</div>
@@ -1269,12 +1264,7 @@ export default function InventoryPage() {
                                         {filteredItems.map((it, idx) => {
                                             const rowBg = idx % 2 === 0 ? "bg-zinc-950" : "bg-zinc-900"
                                             return (
-                                                <div
-                                                    key={it.id}
-                                                    className={["grid cursor-pointer", ROW_H, rowBg, "hover:bg-white/5"].join(" ")}
-                                                    style={{ gridTemplateColumns: middleGridCols }}
-                                                    onClick={() => openDetail(it)}
-                                                >
+                                                <div key={it.id} className={["grid cursor-pointer", ROW_H /* keep */, rowBg, "hover:bg-white/5"].join(" ")} style={{ gridTemplateColumns: middleGridCols }} onClick={() => openDetail(it)}>
                                                     {middleCols.map((d) => (
                                                         <div key={d.key} className={["flex min-w-0 items-center overflow-hidden", CELL_PAD, CELL_Y].join(" ")}>
                                                             {renderMiddleCell(it, d.key)}
@@ -1297,11 +1287,7 @@ export default function InventoryPage() {
                                     {filteredItems.map((it, idx) => {
                                         const rowBg = idx % 2 === 0 ? "bg-zinc-950" : "bg-zinc-900"
                                         return (
-                                            <div
-                                                key={it.id}
-                                                className={["flex items-center justify-end gap-2", ROW_H, CELL_PAD, CELL_Y, rowBg].join(" ")}
-                                                onClick={(e) => e.stopPropagation()}
-                                            >
+                                            <div key={it.id} className={["flex items-center justify-end gap-2", ROW_H, CELL_PAD, CELL_Y, rowBg].join(" ")} onClick={(e) => e.stopPropagation()}>
                                                 <IconButton title="Edit" onClick={() => openEdit(it)}>
                                                     <PencilIcon />
                                                 </IconButton>
@@ -1320,10 +1306,7 @@ export default function InventoryPage() {
                         <div>{fx.nextUpdateUtc ? `FX next update: ${fx.nextUpdateUtc}` : "FX next update: —"}</div>
                         <div className="flex items-center gap-2">
                             <span>Attribution:</span>
-                            <span
-                                className="text-zinc-300 underline underline-offset-2"
-                                dangerouslySetInnerHTML={{ __html: fx.attributionHtml || '<a href="https://www.exchangerate-api.com">Rates By Exchange Rate API</a>' }}
-                            />
+                            <span className="text-zinc-300 underline underline-offset-2" dangerouslySetInnerHTML={{ __html: fx.attributionHtml || '<a href="https://www.exchangerate-api.com">Rates By Exchange Rate API</a>' }} />
                         </div>
                     </div>
                 </div>
@@ -1348,11 +1331,7 @@ export default function InventoryPage() {
                 >
                     <div className="grid gap-4 sm:grid-cols-2">
                         <Field label="Status">
-                            <select
-                                value={filters.status}
-                                onChange={(e) => setFilters((p) => ({ ...p, status: e.target.value }))}
-                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                            >
+                            <select value={filters.status} onChange={(e) => setFilters((p) => ({ ...p, status: e.target.value }))} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
                                 <option value="ALL">All</option>
                                 {STATUSES.map(([v, l]) => (
                                     <option key={v} value={v}>
@@ -1363,11 +1342,7 @@ export default function InventoryPage() {
                         </Field>
 
                         <Field label="Category">
-                            <select
-                                value={filters.category}
-                                onChange={(e) => setFilters((p) => ({ ...p, category: e.target.value }))}
-                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                            >
+                            <select value={filters.category} onChange={(e) => setFilters((p) => ({ ...p, category: e.target.value }))} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
                                 <option value="ALL">All</option>
                                 {CATEGORIES.map((c) => (
                                     <option key={c} value={c}>
@@ -1378,11 +1353,7 @@ export default function InventoryPage() {
                         </Field>
 
                         <Field label="Condition">
-                            <select
-                                value={filters.condition}
-                                onChange={(e) => setFilters((p) => ({ ...p, condition: e.target.value }))}
-                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                            >
+                            <select value={filters.condition} onChange={(e) => setFilters((p) => ({ ...p, condition: e.target.value }))} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
                                 <option value="ALL">All</option>
                                 {CONDITIONS.map((c) => (
                                     <option key={c} value={c}>
@@ -1393,11 +1364,7 @@ export default function InventoryPage() {
                         </Field>
 
                         <Field label="Has platform listing">
-                            <select
-                                value={filters.platform}
-                                onChange={(e) => setFilters((p) => ({ ...p, platform: e.target.value }))}
-                                className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                            >
+                            <select value={filters.platform} onChange={(e) => setFilters((p) => ({ ...p, platform: e.target.value }))} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
                                 <option value="ALL">All</option>
                                 {PLATFORMS.filter(([v]) => v !== "NONE").map(([v, l]) => (
                                     <option key={v} value={v}>
@@ -1407,15 +1374,18 @@ export default function InventoryPage() {
                             </select>
                         </Field>
 
-                        <label className="sm:col-span-2 flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 hover:bg-white/10">
+                        <div
+                            role="button"
+                            tabIndex={0}
+                            className="sm:col-span-2 flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 hover:bg-white/10"
+                            onClick={() => setFilters((p) => ({ ...p, onlyWithLinks: !p.onlyWithLinks }))}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") setFilters((p) => ({ ...p, onlyWithLinks: !p.onlyWithLinks }))
+                            }}
+                        >
                             <div className="text-sm font-semibold text-white">Only items with links</div>
-                            <input
-                                type="checkbox"
-                                checked={!!filters.onlyWithLinks}
-                                onChange={(e) => setFilters((p) => ({ ...p, onlyWithLinks: e.target.checked }))}
-                                className="h-4 w-4 rounded border-white/20 bg-transparent accent-white"
-                            />
-                        </label>
+                            <TickButton checked={!!filters.onlyWithLinks} onToggle={() => setFilters((p) => ({ ...p, onlyWithLinks: !p.onlyWithLinks }))} title={filters.onlyWithLinks ? "Disable" : "Enable"} />
+                        </div>
                     </div>
                 </Modal>
             ) : null}
@@ -1428,11 +1398,7 @@ export default function InventoryPage() {
                     maxWidth="max-w-2xl"
                     footer={
                         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-                            <button
-                                type="button"
-                                onClick={() => setColumns(DEFAULT_COLUMNS)}
-                                className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
-                            >
+                            <button type="button" onClick={() => setColumns(DEFAULT_COLUMNS)} className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10">
                                 Reset to default
                             </button>
                             <button type="button" onClick={() => setColumnsOpen(false)} className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100">
@@ -1452,19 +1418,32 @@ export default function InventoryPage() {
                             const disableEnable = !checked && maxed
 
                             return (
-                                <label
+                                <div
                                     key={d.key}
                                     className={[
-                                        "flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 hover:bg-white/10",
-                                        disableEnable ? "opacity-50 cursor-not-allowed" : "",
+                                        "flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 hover:bg-white/10",
+                                        disableEnable ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
                                     ].join(" ")}
+                                    onClick={() => {
+                                        if (disableEnable) return showToast("error", `Max ${MAX_VISIBLE_COLUMNS} columns`)
+                                        setColumns((p) => {
+                                            const currentlyOn = !!p[d.key]
+                                            if (!currentlyOn && enabledColumnsCount >= MAX_VISIBLE_COLUMNS) {
+                                                showToast("error", `Max ${MAX_VISIBLE_COLUMNS} columns`)
+                                                return p
+                                            }
+                                            const next = { ...p, [d.key]: !currentlyOn }
+                                            return clampColumnsToMax(next, MAX_VISIBLE_COLUMNS)
+                                        })
+                                    }}
                                 >
                                     <div className="text-sm font-semibold text-white">{d.label}</div>
-                                    <input
-                                        type="checkbox"
+                                    <TickButton
                                         checked={checked}
                                         disabled={disableEnable}
-                                        onChange={() => {
+                                        title={checked ? "Disable" : "Enable"}
+                                        onToggle={() => {
+                                            if (disableEnable) return showToast("error", `Max ${MAX_VISIBLE_COLUMNS} columns`)
                                             setColumns((p) => {
                                                 const currentlyOn = !!p[d.key]
                                                 if (!currentlyOn && enabledColumnsCount >= MAX_VISIBLE_COLUMNS) {
@@ -1475,9 +1454,8 @@ export default function InventoryPage() {
                                                 return clampColumnsToMax(next, MAX_VISIBLE_COLUMNS)
                                             })
                                         }}
-                                        className="h-4 w-4 rounded border-white/20 bg-transparent accent-white"
                                     />
-                                </label>
+                                </div>
                             )
                         })}
                     </div>
@@ -1514,30 +1492,15 @@ export default function InventoryPage() {
                             </Field>
 
                             <Field label="SKU *">
-                                <input
-                                    value={addForm.sku}
-                                    onChange={(e) => onAddChange({ sku: e.target.value })}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                    placeholder="e.g. AM95-001"
-                                />
+                                <input value={addForm.sku} onChange={(e) => onAddChange({ sku: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="e.g. AM95-001" />
                             </Field>
 
                             <Field label="Quantity (units)">
-                                <input
-                                    type="number"
-                                    min={0}
-                                    value={addForm.quantity}
-                                    onChange={(e) => onAddChange({ quantity: e.target.value })}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                />
+                                <input type="number" min={0} value={addForm.quantity} onChange={(e) => onAddChange({ quantity: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" />
                             </Field>
 
                             <Field label="Category">
-                                <select
-                                    value={addForm.category}
-                                    onChange={(e) => onAddChange({ category: e.target.value })}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                >
+                                <select value={addForm.category} onChange={(e) => onAddChange({ category: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
                                     {CATEGORIES.map((c) => (
                                         <option key={c} value={c}>
                                             {c}
@@ -1547,11 +1510,7 @@ export default function InventoryPage() {
                             </Field>
 
                             <Field label="Condition">
-                                <select
-                                    value={addForm.condition}
-                                    onChange={(e) => onAddChange({ condition: e.target.value })}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                >
+                                <select value={addForm.condition} onChange={(e) => onAddChange({ condition: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
                                     {CONDITIONS.map((c) => (
                                         <option key={c} value={c}>
                                             {c}
@@ -1563,61 +1522,31 @@ export default function InventoryPage() {
                             <div className="md:col-span-2">
                                 <div className="mb-1.5 text-xs font-semibold text-zinc-300">Status</div>
                                 <div className="inline-flex rounded-2xl border border-white/10 bg-white/5 p-1">
-                                    <button
-                                        type="button"
-                                        onClick={() => onAddChange({ status: "UNLISTED" })}
-                                        className={["h-10 rounded-2xl px-4 text-sm font-semibold transition", addForm.status === "UNLISTED" ? "bg-white text-zinc-950" : "text-white/90 hover:bg-white/10"].join(" ")}
-                                    >
+                                    <button type="button" onClick={() => onAddChange({ status: "UNLISTED" })} className={["h-10 rounded-2xl px-4 text-sm font-semibold transition", addForm.status === "UNLISTED" ? "bg-white text-zinc-950" : "text-white/90 hover:bg-white/10"].join(" ")}>
                                         Unlisted
                                     </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => onAddChange({ status: "LISTED" })}
-                                        className={["h-10 rounded-2xl px-4 text-sm font-semibold transition", addForm.status === "LISTED" ? "bg-white text-zinc-950" : "text-white/90 hover:bg-white/10"].join(" ")}
-                                    >
+                                    <button type="button" onClick={() => onAddChange({ status: "LISTED" })} className={["h-10 rounded-2xl px-4 text-sm font-semibold transition", addForm.status === "LISTED" ? "bg-white text-zinc-950" : "text-white/90 hover:bg-white/10"].join(" ")}>
                                         Listed
                                     </button>
                                 </div>
                             </div>
 
                             <Field label="Total purchase price (all-in) per unit">
-                                <input
-                                    inputMode="decimal"
-                                    value={addForm.purchaseTotal}
-                                    onChange={(e) => onAddChange({ purchaseTotal: e.target.value })}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                    placeholder="0.00"
-                                />
+                                <input inputMode="decimal" value={addForm.purchaseTotal} onChange={(e) => onAddChange({ purchaseTotal: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="0.00" />
                             </Field>
 
                             {!addIsListed ? (
                                 <Field label="Estimated sale price per unit">
-                                    <input
-                                        inputMode="decimal"
-                                        value={addForm.estimatedSale}
-                                        onChange={(e) => onAddChange({ estimatedSale: e.target.value })}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                        placeholder="0.00"
-                                    />
+                                    <input inputMode="decimal" value={addForm.estimatedSale} onChange={(e) => onAddChange({ estimatedSale: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="0.00" />
                                 </Field>
                             ) : (
                                 <>
                                     <Field label="Listing price per unit">
-                                        <input
-                                            inputMode="decimal"
-                                            value={addForm.listingPrice}
-                                            onChange={(e) => onAddChange({ listingPrice: e.target.value })}
-                                            className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                            placeholder="0.00"
-                                        />
+                                        <input inputMode="decimal" value={addForm.listingPrice} onChange={(e) => onAddChange({ listingPrice: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="0.00" />
                                     </Field>
 
                                     <Field label="Listing platform">
-                                        <select
-                                            value={addForm.listingPlatform}
-                                            onChange={(e) => onAddChange({ listingPlatform: e.target.value })}
-                                            className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                        >
+                                        <select value={addForm.listingPlatform} onChange={(e) => onAddChange({ listingPlatform: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
                                             {PLATFORMS.filter(([v]) => v !== "NONE").map(([v, l]) => (
                                                 <option key={v} value={v}>
                                                     {l}
@@ -1627,12 +1556,7 @@ export default function InventoryPage() {
                                     </Field>
 
                                     <Field label="Listing link (optional)" className="md:col-span-2">
-                                        <input
-                                            value={addForm.listingUrl}
-                                            onChange={(e) => onAddChange({ listingUrl: e.target.value })}
-                                            className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                            placeholder="https://…"
-                                        />
+                                        <input value={addForm.listingUrl} onChange={(e) => onAddChange({ listingUrl: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="https://…" />
                                     </Field>
 
                                     <div className="md:col-span-2 flex items-center justify-end">
@@ -1667,32 +1591,19 @@ export default function InventoryPage() {
                                     {!addIsListed ? (
                                         <>
                                             <Snapshot label="Estimated sale total" value={fmt(currencyView, parseMoneyToPence(addForm.estimatedSale) * safeInt(addForm.quantity, 0))} good />
-                                            <Snapshot
-                                                label="Estimated profit"
-                                                value={fmt(currencyView, (parseMoneyToPence(addForm.estimatedSale) - parseMoneyToPence(addForm.purchaseTotal)) * safeInt(addForm.quantity, 0))}
-                                                good
-                                            />
+                                            <Snapshot label="Estimated profit" value={fmt(currencyView, (parseMoneyToPence(addForm.estimatedSale) - parseMoneyToPence(addForm.purchaseTotal)) * safeInt(addForm.quantity, 0))} good />
                                         </>
                                     ) : (
                                         <>
                                             <Snapshot label="Listed sale total" value={fmt(currencyView, parseMoneyToPence(addForm.listingPrice) * safeInt(addForm.quantity, 0))} good />
-                                            <Snapshot
-                                                label="Listed profit"
-                                                value={fmt(currencyView, (parseMoneyToPence(addForm.listingPrice) - parseMoneyToPence(addForm.purchaseTotal)) * safeInt(addForm.quantity, 0))}
-                                                good
-                                            />
+                                            <Snapshot label="Listed profit" value={fmt(currencyView, (parseMoneyToPence(addForm.listingPrice) - parseMoneyToPence(addForm.purchaseTotal)) * safeInt(addForm.quantity, 0))} good />
                                         </>
                                     )}
                                 </div>
                             </div>
 
                             <Field label="Notes" className="md:col-span-2">
-                                <textarea
-                                    value={addForm.notes}
-                                    onChange={(e) => onAddChange({ notes: e.target.value })}
-                                    className="min-h-[110px] w-full resize-none rounded-2xl border border-white/10 bg-zinc-950/60 px-4 py-3 text-sm text-white outline-none focus:border-white/20"
-                                    placeholder="Anything useful…"
-                                />
+                                <textarea value={addForm.notes} onChange={(e) => onAddChange({ notes: e.target.value })} className="min-h-[110px] w-full resize-none rounded-2xl border border-white/10 bg-zinc-950/60 px-4 py-3 text-sm text-white outline-none focus:border-white/20" placeholder="Anything useful…" />
                             </Field>
                         </div>
                     </form>
@@ -1729,40 +1640,19 @@ export default function InventoryPage() {
                     <form id="rt-edit-item" onSubmit={submitEdit} className="space-y-4">
                         <div className="grid gap-4 md:grid-cols-2">
                             <Field label="Title *" className="md:col-span-2">
-                                <input
-                                    value={editForm.title}
-                                    onChange={(e) => onEditChange({ title: e.target.value })}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                    placeholder="e.g. Nike Air Max 95"
-                                    autoFocus
-                                />
+                                <input value={editForm.title} onChange={(e) => onEditChange({ title: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="e.g. Nike Air Max 95" autoFocus />
                             </Field>
 
                             <Field label="SKU (optional)">
-                                <input
-                                    value={editForm.sku}
-                                    onChange={(e) => onEditChange({ sku: e.target.value })}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                    placeholder="e.g. AM95-001"
-                                />
+                                <input value={editForm.sku} onChange={(e) => onEditChange({ sku: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="e.g. AM95-001" />
                             </Field>
 
                             <Field label="Quantity (units)">
-                                <input
-                                    type="number"
-                                    min={0}
-                                    value={editForm.quantity}
-                                    onChange={(e) => onEditChange({ quantity: e.target.value })}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                />
+                                <input type="number" min={0} value={editForm.quantity} onChange={(e) => onEditChange({ quantity: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" />
                             </Field>
 
                             <Field label="Category">
-                                <select
-                                    value={editForm.category}
-                                    onChange={(e) => onEditChange({ category: e.target.value })}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                >
+                                <select value={editForm.category} onChange={(e) => onEditChange({ category: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
                                     {CATEGORIES.map((c) => (
                                         <option key={c} value={c}>
                                             {c}
@@ -1772,11 +1662,7 @@ export default function InventoryPage() {
                             </Field>
 
                             <Field label="Condition">
-                                <select
-                                    value={editForm.condition}
-                                    onChange={(e) => onEditChange({ condition: e.target.value })}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                >
+                                <select value={editForm.condition} onChange={(e) => onEditChange({ condition: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
                                     {CONDITIONS.map((c) => (
                                         <option key={c} value={c}>
                                             {c}
@@ -1787,11 +1673,7 @@ export default function InventoryPage() {
 
                             <div className="md:col-span-2">
                                 <div className="mb-1.5 text-xs font-semibold text-zinc-300">Status</div>
-                                <select
-                                    value={editForm.status}
-                                    onChange={(e) => onEditChange({ status: e.target.value })}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                >
+                                <select value={editForm.status} onChange={(e) => onEditChange({ status: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
                                     {STATUSES.map(([v, l]) => (
                                         <option key={v} value={v}>
                                             {l}
@@ -1801,43 +1683,21 @@ export default function InventoryPage() {
                             </div>
 
                             <Field label="Total purchase price (all-in) per unit">
-                                <input
-                                    inputMode="decimal"
-                                    value={editForm.purchaseTotal}
-                                    onChange={(e) => onEditChange({ purchaseTotal: e.target.value })}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                    placeholder="0.00"
-                                />
+                                <input inputMode="decimal" value={editForm.purchaseTotal} onChange={(e) => onEditChange({ purchaseTotal: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="0.00" />
                             </Field>
 
                             {!editIsListed ? (
                                 <Field label="Estimated sale price per unit">
-                                    <input
-                                        inputMode="decimal"
-                                        value={editForm.estimatedSale}
-                                        onChange={(e) => onEditChange({ estimatedSale: e.target.value })}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                        placeholder="0.00"
-                                    />
+                                    <input inputMode="decimal" value={editForm.estimatedSale} onChange={(e) => onEditChange({ estimatedSale: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="0.00" />
                                 </Field>
                             ) : (
                                 <>
                                     <Field label="Listing price per unit">
-                                        <input
-                                            inputMode="decimal"
-                                            value={editForm.listingPrice}
-                                            onChange={(e) => onEditChange({ listingPrice: e.target.value })}
-                                            className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                            placeholder="0.00"
-                                        />
+                                        <input inputMode="decimal" value={editForm.listingPrice} onChange={(e) => onEditChange({ listingPrice: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="0.00" />
                                     </Field>
 
                                     <Field label="Listing platform">
-                                        <select
-                                            value={editForm.listingPlatform}
-                                            onChange={(e) => onEditChange({ listingPlatform: e.target.value })}
-                                            className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                        >
+                                        <select value={editForm.listingPlatform} onChange={(e) => onEditChange({ listingPlatform: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
                                             {PLATFORMS.filter(([v]) => v !== "NONE").map(([v, l]) => (
                                                 <option key={v} value={v}>
                                                     {l}
@@ -1847,12 +1707,7 @@ export default function InventoryPage() {
                                     </Field>
 
                                     <Field label="Listing link (optional)" className="md:col-span-2">
-                                        <input
-                                            value={editForm.listingUrl}
-                                            onChange={(e) => onEditChange({ listingUrl: e.target.value })}
-                                            className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                            placeholder="https://…"
-                                        />
+                                        <input value={editForm.listingUrl} onChange={(e) => onEditChange({ listingUrl: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="https://…" />
                                     </Field>
 
                                     <div className="md:col-span-2 flex items-center justify-end">
@@ -1887,32 +1742,19 @@ export default function InventoryPage() {
                                     {!editIsListed ? (
                                         <>
                                             <Snapshot label="Estimated sale total" value={fmt(currencyView, parseMoneyToPence(editForm.estimatedSale) * safeInt(editForm.quantity, 0))} good />
-                                            <Snapshot
-                                                label="Estimated profit"
-                                                value={fmt(currencyView, (parseMoneyToPence(editForm.estimatedSale) - parseMoneyToPence(editForm.purchaseTotal)) * safeInt(editForm.quantity, 0))}
-                                                good
-                                            />
+                                            <Snapshot label="Estimated profit" value={fmt(currencyView, (parseMoneyToPence(editForm.estimatedSale) - parseMoneyToPence(editForm.purchaseTotal)) * safeInt(editForm.quantity, 0))} good />
                                         </>
                                     ) : (
                                         <>
                                             <Snapshot label="Listed sale total" value={fmt(currencyView, parseMoneyToPence(editForm.listingPrice) * safeInt(editForm.quantity, 0))} good />
-                                            <Snapshot
-                                                label="Listed profit"
-                                                value={fmt(currencyView, (parseMoneyToPence(editForm.listingPrice) - parseMoneyToPence(editForm.purchaseTotal)) * safeInt(editForm.quantity, 0))}
-                                                good
-                                            />
+                                            <Snapshot label="Listed profit" value={fmt(currencyView, (parseMoneyToPence(editForm.listingPrice) - parseMoneyToPence(editForm.purchaseTotal)) * safeInt(editForm.quantity, 0))} good />
                                         </>
                                     )}
                                 </div>
                             </div>
 
                             <Field label="Notes" className="md:col-span-2">
-                                <textarea
-                                    value={editForm.notes}
-                                    onChange={(e) => onEditChange({ notes: e.target.value })}
-                                    className="min-h-[110px] w-full resize-none rounded-2xl border border-white/10 bg-zinc-950/60 px-4 py-3 text-sm text-white outline-none focus:border-white/20"
-                                    placeholder="Anything useful…"
-                                />
+                                <textarea value={editForm.notes} onChange={(e) => onEditChange({ notes: e.target.value })} className="min-h-[110px] w-full resize-none rounded-2xl border border-white/10 bg-zinc-950/60 px-4 py-3 text-sm text-white outline-none focus:border-white/20" placeholder="Anything useful…" />
                             </Field>
                         </div>
                     </form>
@@ -1973,23 +1815,11 @@ function DetailPanel({ item, currencyView, rates }) {
                 <Row label={`${saleLabel} total`} value={saleTotal == null ? "—" : fmt(currencyView, saleTotal)} />
                 <Row
                     label="Profit total"
-                    value={
-                        profit == null ? (
-                            "—"
-                        ) : (
-                            <span className={profit >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>{fmt(currencyView, profit)}</span>
-                        )
-                    }
+                    value={profit == null ? "—" : <span className={profit >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>{fmt(currencyView, profit)}</span>}
                 />
                 <Row
                     label="Profit / unit"
-                    value={
-                        profitUnit == null ? (
-                            "—"
-                        ) : (
-                            <span className={profitUnit >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>{fmt(currencyView, profitUnit)}</span>
-                        )
-                    }
+                    value={profitUnit == null ? "—" : <span className={profitUnit >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>{fmt(currencyView, profitUnit)}</span>}
                 />
             </Card>
 
