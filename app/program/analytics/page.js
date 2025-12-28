@@ -4,6 +4,8 @@
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 
+/* ========================= Currency + helpers ========================= */
+
 const CURRENCY_META = {
     GBP: { symbol: "£", label: "GBP" },
     USD: { symbol: "$", label: "USD" },
@@ -39,7 +41,11 @@ const safeNum = (x, d = 0) => {
     return n
 }
 
+const safeStr = (x) => String(x ?? "").trim()
+const clamp = (n, a, b) => Math.max(a, Math.min(b, n))
 const pad2 = (n) => String(n).padStart(2, "0")
+
+/* ============================ Date helpers ============================ */
 
 const startOfLocalDay = (d) => {
     const x = new Date(d)
@@ -51,9 +57,10 @@ const endOfLocalDay = (d) => {
     x.setHours(23, 59, 59, 999)
     return x
 }
+
 const startOfLocalWeek = (d) => {
     const x = startOfLocalDay(d)
-    const day = x.getDay() // 0 Sun ... 6 Sat
+    const day = x.getDay()
     const diff = day === 0 ? 6 : day - 1 // Monday start
     x.setDate(x.getDate() - diff)
     return x
@@ -74,7 +81,7 @@ const getRangeBounds = (range) => {
     if (range === "today") return { from: startOfLocalDay(now), to: endOfLocalDay(now) }
     if (range === "week") return { from: startOfLocalWeek(now), to: endOfLocalDay(now) }
     if (range === "month") return { from: startOfLocalMonth(now), to: endOfLocalDay(now) }
-    return { from: startOfLocalYear(now), to: endOfLocalDay(now) } // year
+    return { from: startOfLocalYear(now), to: endOfLocalDay(now) }
 }
 
 const toISODate = (d) => {
@@ -82,28 +89,120 @@ const toISODate = (d) => {
     return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`
 }
 
-function Pill({ active, onClick, children }) {
+const addDays = (d, days) => {
+    const x = new Date(d)
+    x.setDate(x.getDate() + days)
+    return x
+}
+
+const monthLabelShort = (d) => {
+    const dt = new Date(d)
+    return dt.toLocaleDateString(undefined, { month: "short" })
+}
+
+/* ============================ Notes helpers =========================== */
+
+const decodeNotes = (notes) => {
+    const s = String(notes ?? "")
+    if (!s) return { notes: "", meta: {} }
+    try {
+        const o = JSON.parse(s)
+        if (o && typeof o === "object" && (o.v === 1 || o.v === 2 || o.v === 3 || o.v === 4)) {
+            return { notes: String(o.notes || ""), meta: o.meta && typeof o.meta === "object" ? o.meta : {} }
+        }
+        return { notes: s, meta: {} }
+    } catch {
+        return { notes: s, meta: {} }
+    }
+}
+
+function normaliseMeta(meta) {
+    const m = meta && typeof meta === "object" ? meta : {}
+    const currency = (m.currency || "GBP").toUpperCase()
+    const status = (m.status || "UNLISTED").toUpperCase()
+    const category = safeStr(m.category) || "Other"
+    const condition = safeStr(m.condition) || "—"
+    const purchaseTotalPence = Number(m.purchaseTotalPence) || 0
+
+    const listings = Array.isArray(m.listings)
+        ? m.listings
+            .map((x) => ({
+                platform: (x?.platform || "OTHER").toUpperCase(),
+                url: safeStr(x?.url) || "",
+                pricePence: x?.pricePence == null ? null : Number(x.pricePence),
+            }))
+            .filter((x) => x.url || Number.isFinite(x.pricePence))
+        : []
+
+    return { currency, status, category, condition, purchaseTotalPence, listings }
+}
+
+function computeItem(it) {
+    const decoded = decodeNotes(it.notes)
+    const meta = normaliseMeta(decoded.meta)
+
+    const q = safeNum(it.quantity, 0)
+    const status = (meta.status || it.status || "UNLISTED").toUpperCase()
+    const cur = (meta.currency || it.currency || "GBP").toUpperCase()
+
+    const perUnit =
+        meta.purchaseTotalPence > 0 ? meta.purchaseTotalPence : safeNum(it.purchaseSubtotalPence || it.costPence || 0, 0)
+
+    const invValue = Math.max(0, perUnit * q)
+
+    const firstListing = meta.listings?.[0] || null
+    const listedPricePerUnit = firstListing?.pricePence ?? null
+
+    return {
+        cur,
+        q,
+        status,
+        perUnit,
+        invValue,
+        category: meta.category,
+        condition: meta.condition,
+        listedPricePerUnit,
+        listings: meta.listings || [],
+    }
+}
+
+/* ============================== UI =================================== */
+
+function Segmented({ value, onChange, options }) {
     return (
-        <button
-            type="button"
-            onClick={onClick}
-            className={[
-                "h-10 rounded-2xl px-4 text-sm font-semibold transition",
-                active ? "bg-white text-zinc-950" : "border border-white/10 bg-white/5 text-white/80 hover:bg-white/10",
-            ].join(" ")}
-        >
-            {children}
-        </button>
+        <div className="inline-flex rounded-2xl border border-white/10 bg-white/5 p-1">
+            {options.map((o) => {
+                const active = o.value === value
+                return (
+                    <button
+                        key={o.value}
+                        type="button"
+                        onClick={() => onChange(o.value)}
+                        className={[
+                            "h-9 rounded-xl px-3 text-sm font-semibold transition",
+                            active ? "bg-white text-zinc-950" : "text-white/75 hover:text-white",
+                        ].join(" ")}
+                    >
+                        {o.label}
+                    </button>
+                )
+            })}
+        </div>
     )
 }
 
-function Card({ title, subtitle, right, children }) {
+function Card({ title, subtitle, right, children, className = "" }) {
     return (
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-5 shadow-lg backdrop-blur">
+        <div
+            className={[
+                "rounded-3xl border border-white/10 bg-white/[0.04] p-5 shadow-[0_0_0_1px_rgba(255,255,255,0.03)] backdrop-blur",
+                className,
+            ].join(" ")}
+        >
             <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
-                    <div className="text-sm font-semibold text-white">{title}</div>
-                    {subtitle ? <div className="mt-1 text-xs text-zinc-300">{subtitle}</div> : null}
+                    <div className="text-sm font-semibold text-white/90">{title}</div>
+                    {subtitle ? <div className="mt-1 text-xs text-white/45">{subtitle}</div> : null}
                 </div>
                 {right ? <div className="shrink-0">{right}</div> : null}
             </div>
@@ -112,38 +211,20 @@ function Card({ title, subtitle, right, children }) {
     )
 }
 
-function Stat({ label, value, sub, good = false }) {
+function KPI({ label, value, sub, tone = "neutral" }) {
+    const valueCls =
+        tone === "good"
+            ? "text-emerald-200"
+            : tone === "bad"
+                ? "text-red-200"
+                : tone === "warn"
+                    ? "text-orange-200"
+                    : "text-white"
     return (
-        <div className="rounded-2xl border border-white/10 bg-zinc-950/30 p-4">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-300">{label}</div>
-            <div className={["mt-2 text-2xl font-semibold", good ? "text-emerald-200" : "text-white"].join(" ")}>
-                {value}
-            </div>
-            {sub ? <div className="mt-1 text-xs text-zinc-400">{sub}</div> : null}
-        </div>
-    )
-}
-
-function MiniRow({ label, value }) {
-    return (
-        <div className="flex items-center justify-between gap-3 py-2">
-            <div className="text-xs font-semibold text-zinc-300">{label}</div>
-            <div className="text-sm text-white">{value}</div>
-        </div>
-    )
-}
-
-function BarRow({ label, value, max, right, tone = "bg-white/20" }) {
-    const pct = max > 0 ? Math.max(0, Math.min(1, value / max)) : 0
-    return (
-        <div className="space-y-2">
-            <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0 truncate text-[13px] font-semibold text-white">{label}</div>
-                <div className="shrink-0 text-xs font-semibold text-zinc-200">{right}</div>
-            </div>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
-                <div className={["h-full rounded-full", tone].join(" ")} style={{ width: `${pct * 100}%` }} />
-            </div>
+        <div className="rounded-2xl border border-white/10 bg-zinc-950/25 p-4">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-white/45">{label}</div>
+            <div className={["mt-2 text-2xl font-semibold", valueCls].join(" ")}>{value}</div>
+            {sub ? <div className="mt-1 text-xs text-white/40">{sub}</div> : null}
         </div>
     )
 }
@@ -151,7 +232,10 @@ function BarRow({ label, value, max, right, tone = "bg-white/20" }) {
 function Table({ columns, rows, emptyText = "No data" }) {
     return (
         <div className="rounded-2xl border border-white/10 overflow-hidden">
-            <div className="grid border-b border-white/10 bg-white/5" style={{ gridTemplateColumns: columns.map((c) => c.w).join(" ") }}>
+            <div
+                className="grid border-b border-white/10 bg-white/5"
+                style={{ gridTemplateColumns: columns.map((c) => c.w).join(" ") }}
+            >
                 {columns.map((c) => (
                     <div key={c.k} className="px-3 py-2 text-xs font-semibold text-zinc-200">
                         {c.t}
@@ -161,7 +245,11 @@ function Table({ columns, rows, emptyText = "No data" }) {
             <div className="divide-y divide-white/10">
                 {rows.length === 0 ? <div className="px-3 py-6 text-sm text-zinc-300">{emptyText}</div> : null}
                 {rows.map((r, idx) => (
-                    <div key={r._k || idx} className={["grid", idx % 2 === 0 ? "bg-zinc-950" : "bg-zinc-900"].join(" ")} style={{ gridTemplateColumns: columns.map((c) => c.w).join(" ") }}>
+                    <div
+                        key={r._k || idx}
+                        className={["grid", idx % 2 === 0 ? "bg-zinc-950" : "bg-zinc-900"].join(" ")}
+                        style={{ gridTemplateColumns: columns.map((c) => c.w).join(" ") }}
+                    >
                         {columns.map((c) => (
                             <div key={c.k} className="px-3 py-2 text-[13px] text-zinc-100">
                                 {typeof c.render === "function" ? c.render(r) : r[c.k]}
@@ -174,6 +262,186 @@ function Table({ columns, rows, emptyText = "No data" }) {
     )
 }
 
+function Tooltip({ open, x, y, title, lines }) {
+    if (!open) return null
+    return (
+        <div className="pointer-events-none fixed z-50" style={{ left: x + 12, top: y + 12 }}>
+            <div className="w-[240px] rounded-2xl border border-white/10 bg-zinc-950/95 px-3 py-2 shadow-xl backdrop-blur">
+                <div className="text-xs font-semibold text-white/90">{title}</div>
+                <div className="mt-1 space-y-1">
+                    {lines.map((l, i) => (
+                        <div key={i} className="flex items-center justify-between gap-3 text-[12px]">
+                            <span className="text-white/50">{l.k}</span>
+                            <span className={["font-semibold", l.tone || "text-white/85"].join(" ")}>{l.v}</span>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        </div>
+    )
+}
+
+function HeatLegend({ labelLeft, labelRight }) {
+    return (
+        <div className="flex items-center justify-between gap-3 text-xs text-white/45">
+            <span>{labelLeft}</span>
+            <div className="flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded bg-white/10" />
+                <span className="h-2.5 w-2.5 rounded bg-white/20" />
+                <span className="h-2.5 w-2.5 rounded bg-emerald-400/20" />
+                <span className="h-2.5 w-2.5 rounded bg-emerald-400/35" />
+                <span className="h-2.5 w-2.5 rounded bg-emerald-400/55" />
+                <span className="h-2.5 w-2.5 rounded bg-emerald-400/80" />
+            </div>
+            <span>{labelRight}</span>
+        </div>
+    )
+}
+
+function levelClass(level) {
+    if (level <= 0) return "bg-white/10"
+    if (level === 1) return "bg-white/20"
+    if (level === 2) return "bg-emerald-400/20"
+    if (level === 3) return "bg-emerald-400/35"
+    if (level === 4) return "bg-emerald-400/55"
+    return "bg-emerald-400/80"
+}
+
+function Heatmap({ weeks, onHoverCell, onLeave, onClickCell, selectedKey, isDisabledKey }) {
+    const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    return (
+        <div className="grid gap-3">
+            <div className="grid grid-cols-[36px_1fr] gap-3">
+                <div className="pt-[22px]">
+                    <div className="grid grid-rows-7 gap-1">
+                        {dayNames.map((d, i) => (
+                            <div key={d} className="h-3 text-[11px] text-white/35 flex items-center">
+                                {i % 2 === 0 ? d : ""}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="min-w-0">
+                    <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))` }}>
+                        {weeks.map((w, wi) => (
+                            <div key={w.key || wi} className="grid grid-rows-7 gap-1">
+                                {w.days.map((cell) => {
+                                    const isSelected = selectedKey && cell.key === selectedKey
+                                    const disabled = isDisabledKey ? isDisabledKey(cell.key) : false
+                                    const base = disabled ? "bg-white/5 border-white/5 opacity-60" : levelClass(cell.level)
+
+                                    return (
+                                        <button
+                                            key={cell.key}
+                                            type="button"
+                                            disabled={disabled || cell.key.startsWith("empty-")}
+                                            className={[
+                                                "h-3 w-3 rounded-[4px] border transition",
+                                                disabled ? base : base,
+                                                disabled ? "cursor-not-allowed" : "",
+                                                isSelected ? "ring-2 ring-white/60" : disabled ? "" : "hover:ring-2 hover:ring-white/30",
+                                            ].join(" ")}
+                                            onMouseEnter={(e) => !disabled && onHoverCell(e, cell)}
+                                            onMouseMove={(e) => !disabled && onHoverCell(e, cell)}
+                                            onMouseLeave={onLeave}
+                                            onClick={() => !disabled && onClickCell(cell)}
+                                            aria-label={`${cell.key}`}
+                                        />
+                                    )
+                                })}
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="mt-3 grid gap-1" style={{ gridTemplateColumns: `repeat(${weeks.length}, minmax(0, 1fr))` }}>
+                        {weeks.map((w, wi) => (
+                            <div key={wi} className="text-[11px] text-white/35">
+                                {w.monthLabel}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        </div>
+    )
+}
+
+/* ===================== Simple charts (no scroll) ====================== */
+
+function Donut({ segments, centreTop, centreBottom }) {
+    const total = Math.max(1, segments.reduce((a, s) => a + (s.value || 0), 0))
+    let start = 0
+    const stops = segments.map((s) => {
+        const pct = ((s.value || 0) / total) * 100
+        const from = start
+        const to = start + pct
+        start = to
+        return { ...s, from, to }
+    })
+    const bg = `conic-gradient(${stops.map((s) => `${s.colour} ${s.from.toFixed(2)}% ${s.to.toFixed(2)}%`).join(", ")})`
+
+    return (
+        <div className="grid gap-4 md:grid-cols-[180px_1fr] items-center">
+            <div className="relative h-44 w-44 mx-auto md:mx-0">
+                <div className="absolute inset-0 rounded-full" style={{ background: bg }} />
+                <div className="absolute inset-6 rounded-full bg-zinc-950/80 border border-white/10" />
+                <div className="absolute inset-0 flex items-center justify-center text-center">
+                    <div>
+                        <div className="text-2xl font-bold text-white">{centreTop}</div>
+                        <div className="text-xs text-white/40">{centreBottom}</div>
+                    </div>
+                </div>
+            </div>
+
+            <div className="space-y-2">
+                {segments.map((s) => (
+                    <div
+                        key={s.label}
+                        className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-zinc-950/25 px-3 py-2"
+                    >
+                        <div className="flex items-center gap-2 min-w-0">
+                            <span className="h-2.5 w-2.5 rounded-full" style={{ background: s.colour }} />
+                            <div className="truncate text-sm font-semibold text-white/85">{s.label}</div>
+                        </div>
+                        <div className="text-sm font-semibold text-white">{s.right}</div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    )
+}
+
+function Bars({ title, items, maxValue, tone = "bg-white/20", valueLabel, rightKey = "right" }) {
+    return (
+        <div className="space-y-3">
+            <div className="text-xs font-semibold text-white/55">{title}</div>
+            {items.length === 0 ? (
+                <div className="text-sm text-white/55">No data.</div>
+            ) : (
+                items.map((it) => {
+                    const pct = maxValue > 0 ? clamp(it.value / maxValue, 0, 1) : 0
+                    return (
+                        <div key={it.label} className="rounded-2xl border border-white/10 bg-zinc-950/25 p-4 space-y-2">
+                            <div className="flex items-center justify-between gap-3">
+                                <div className="min-w-0 truncate text-sm font-semibold text-white/90">{it.label}</div>
+                                <div className="shrink-0 text-xs font-semibold text-white/70">{it[rightKey]}</div>
+                            </div>
+                            <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
+                                <div className={["h-full rounded-full", tone].join(" ")} style={{ width: `${pct * 100}%` }} />
+                            </div>
+                            {valueLabel ? <div className="text-[11px] text-white/40">{valueLabel(it)}</div> : null}
+                        </div>
+                    )
+                })
+            )}
+        </div>
+    )
+}
+
+/* ============================ Page =================================== */
+
 export default function AnalyticsPage() {
     const [loading, setLoading] = useState(true)
     const [err, setErr] = useState(null)
@@ -181,9 +449,11 @@ export default function AnalyticsPage() {
     const [sales, setSales] = useState([])
     const [items, setItems] = useState([])
 
+    // Range affects KPIs + charts (NOT the heatmap canvas)
     const [range, setRange] = useState("month")
-    const [view, setView] = useState("day") // day|week|month
-    const [topN, setTopN] = useState(8)
+
+    // Heatmap is always fixed to YEAR window (current year)
+    const [categoryFilter, setCategoryFilter] = useState("ALL")
 
     const [currencyView, setCurrencyView] = useState(() => {
         if (typeof window === "undefined") return "GBP"
@@ -197,6 +467,9 @@ export default function AnalyticsPage() {
         attributionHtml: null,
         error: null,
     })
+
+    const [tooltip, setTooltip] = useState({ open: false, x: 0, y: 0, title: "", lines: [] })
+    const [selectedDayKey, setSelectedDayKey] = useState(null)
 
     useEffect(() => {
         if (typeof window !== "undefined") localStorage.setItem("rt_currency_view", currencyView)
@@ -255,214 +528,448 @@ export default function AnalyticsPage() {
     useEffect(() => {
         loadAll()
         loadFx()
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
+    const itemById = useMemo(() => {
+        const map = new Map()
+        for (const it of items) {
+            map.set(String(it.id), { it, c: computeItem(it) })
+        }
+        return map
+    }, [items])
+
+    const categories = useMemo(() => {
+        const set = new Set()
+        for (const it of items) {
+            const c = computeItem(it)
+            set.add(c.category || "Other")
+        }
+        const arr = Array.from(set.values()).sort((a, b) => String(a).localeCompare(String(b)))
+        return ["ALL", ...arr]
+    }, [items])
+
+    // Range bounds for KPIs + charts
     const { from: rangeFrom, to: rangeTo } = useMemo(() => getRangeBounds(range), [range])
 
-    const salesInRange = useMemo(() => {
+    // Heatmap year bounds (fixed)
+    const heatYearBounds = useMemo(() => {
+        const now = new Date()
+        const from = startOfLocalYear(now)
+        const to = endOfLocalDay(now) // to "today" inside the year
+        return { from, to }
+    }, [])
+
+    // sales -> computed (for selected range)
+    const computedSales = useMemo(() => {
         const fromMs = rangeFrom.getTime()
         const toMs = rangeTo.getTime()
-        return sales
+
+        const list = sales
             .map((s) => {
                 const dt = s.soldAt ? new Date(s.soldAt) : null
-                return { s, dt, t: dt && !Number.isNaN(dt.getTime()) ? dt.getTime() : null }
+                const t = dt && !Number.isNaN(dt.getTime()) ? dt.getTime() : null
+                return { s, dt, t }
             })
             .filter((x) => x.t != null && x.t >= fromMs && x.t <= toMs)
-            .sort((a, b) => (b.t || 0) - (a.t || 0))
-            .map((x) => x.s)
-    }, [sales, rangeFrom, rangeTo])
+            .map((x) => {
+                const s = x.s
+                const cur = (s.currency || "GBP").toUpperCase()
+                const qty = safeNum(s.quantitySold, 0)
+                const ppu = safeNum(s.salePricePerUnitPence, 0)
+                const fees = safeNum(s.feesPence, 0)
 
-    const computedSales = useMemo(() => {
-        return salesInRange.map((s) => {
-            const cur = (s.currency || "GBP").toUpperCase()
-            const qty = safeNum(s.quantitySold, 0)
-            const ppu = safeNum(s.salePricePerUnitPence, 0)
-            const fees = safeNum(s.feesPence, 0)
+                const grossPence = qty * ppu
+                const netPence = s.netPence != null ? safeNum(s.netPence, 0) : Math.max(0, grossPence - fees)
 
-            const grossPence = qty * ppu
-            const netPence = s.netPence != null ? safeNum(s.netPence, 0) : Math.max(0, grossPence - fees)
+                const costTotal =
+                    s.costTotalPence != null
+                        ? safeNum(s.costTotalPence, 0)
+                        : s.costPerUnitPence != null
+                            ? safeNum(s.costPerUnitPence, 0) * qty
+                            : 0
 
-            const costTotal =
-                s.costTotalPence != null
-                    ? safeNum(s.costTotalPence, 0)
-                    : s.costPerUnitPence != null
-                        ? safeNum(s.costPerUnitPence, 0) * qty
-                        : 0
+                const profitPence = netPence - costTotal
 
-            const profitPence = netPence - costTotal
+                const netView = convertMinor(netPence, cur, currencyView, fx.rates).value
+                const profitView = convertMinor(profitPence, cur, currencyView, fx.rates).value
 
-            const netView = convertMinor(netPence, cur, currencyView, fx.rates).value
-            const profitView = convertMinor(profitPence, cur, currencyView, fx.rates).value
-            const grossView = convertMinor(grossPence, cur, currencyView, fx.rates).value
-            const feesView = convertMinor(fees, cur, currencyView, fx.rates).value
-            const costView = convertMinor(costTotal, cur, currencyView, fx.rates).value
+                const itemId = s.itemId != null ? String(s.itemId) : null
+                const itemRow = itemId ? itemById.get(itemId) : null
+                const category = itemRow?.c?.category || "Other"
 
-            const dt = s.soldAt ? new Date(s.soldAt) : null
-            const t = dt && !Number.isNaN(dt.getTime()) ? dt.getTime() : null
+                return {
+                    ...s,
+                    _dt: x.dt,
+                    _t: x.t,
+                    _dayKey: x.dt ? toISODate(x.dt) : "—",
+                    _netView: netView,
+                    _profitView: profitView,
+                    _qty: qty,
+                    _category: category,
+                }
+            })
 
-            return {
-                ...s,
-                _cur: cur,
-                _t: t,
-                _dateKey: dt ? toISODate(dt) : "—",
-                _weekKey: dt ? `${dt.getFullYear()}-W${pad2(getISOWeek(dt))}` : "—",
-                _monthKey: dt ? `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}` : "—",
-                _netView: netView,
-                _profitView: profitView,
-                _grossView: grossView,
-                _feesView: feesView,
-                _costView: costView,
-                _qty: qty,
-            }
-        })
-    }, [salesInRange, currencyView, fx.rates])
+        if (categoryFilter === "ALL") return list.sort((a, b) => (b._t || 0) - (a._t || 0))
+        return list.filter((s) => s._category === categoryFilter).sort((a, b) => (b._t || 0) - (a._t || 0))
+    }, [sales, rangeFrom, rangeTo, currencyView, fx.rates, itemById, categoryFilter])
+
+    // sales -> computed (for HEATMAP YEAR, fixed)
+    const computedSalesYear = useMemo(() => {
+        const fromMs = heatYearBounds.from.getTime()
+        const toMs = heatYearBounds.to.getTime()
+
+        const list = sales
+            .map((s) => {
+                const dt = s.soldAt ? new Date(s.soldAt) : null
+                const t = dt && !Number.isNaN(dt.getTime()) ? dt.getTime() : null
+                return { s, dt, t }
+            })
+            .filter((x) => x.t != null && x.t >= fromMs && x.t <= toMs)
+            .map((x) => {
+                const s = x.s
+                const cur = (s.currency || "GBP").toUpperCase()
+                const qty = safeNum(s.quantitySold, 0)
+                const ppu = safeNum(s.salePricePerUnitPence, 0)
+                const fees = safeNum(s.feesPence, 0)
+
+                const grossPence = qty * ppu
+                const netPence = s.netPence != null ? safeNum(s.netPence, 0) : Math.max(0, grossPence - fees)
+
+                const costTotal =
+                    s.costTotalPence != null
+                        ? safeNum(s.costTotalPence, 0)
+                        : s.costPerUnitPence != null
+                            ? safeNum(s.costPerUnitPence, 0) * qty
+                            : 0
+
+                const profitPence = netPence - costTotal
+
+                const netView = convertMinor(netPence, cur, currencyView, fx.rates).value
+                const profitView = convertMinor(profitPence, cur, currencyView, fx.rates).value
+
+                const itemId = s.itemId != null ? String(s.itemId) : null
+                const itemRow = itemId ? itemById.get(itemId) : null
+                const category = itemRow?.c?.category || "Other"
+
+                return {
+                    ...s,
+                    _dt: x.dt,
+                    _t: x.t,
+                    _dayKey: x.dt ? toISODate(x.dt) : "—",
+                    _netView: netView,
+                    _profitView: profitView,
+                    _qty: qty,
+                    _category: category,
+                }
+            })
+
+        if (categoryFilter === "ALL") return list.sort((a, b) => (b._t || 0) - (a._t || 0))
+        return list.filter((s) => s._category === categoryFilter).sort((a, b) => (b._t || 0) - (a._t || 0))
+    }, [sales, heatYearBounds, currencyView, fx.rates, itemById, categoryFilter])
 
     const headline = useMemo(() => {
         let revenue = 0
         let profit = 0
-        let gross = 0
-        let fees = 0
-        let cost = 0
         let units = 0
         let rows = 0
-
         for (const s of computedSales) {
             revenue += s._netView
             profit += s._profitView
-            gross += s._grossView
-            fees += s._feesView
-            cost += s._costView
             units += s._qty
             rows += 1
         }
-
-        const aov = rows > 0 ? Math.round((revenue / rows) * 1) : 0
-        const ppu = units > 0 ? Math.round((profit / units) * 1) : 0
         const margin = revenue > 0 ? (profit / revenue) * 100 : 0
-
+        const aov = rows > 0 ? Math.round(revenue / rows) : 0
+        const ppu = units > 0 ? Math.round(profit / units) : 0
         return {
             rows,
             units,
             revenue,
             profit,
-            gross,
-            fees,
-            cost,
+            margin: Number.isFinite(margin) ? Math.round(margin * 10) / 10 : 0,
             aov,
             profitPerUnit: ppu,
-            margin: Number.isFinite(margin) ? Math.round(margin * 10) / 10 : 0,
         }
     }, [computedSales])
 
-    const series = useMemo(() => {
-        const keyFn =
-            view === "day" ? (x) => x._dateKey : view === "week" ? (x) => x._weekKey : (x) => x._monthKey
+    /* ===================== Heatmap build (fixed year canvas) ===================== */
 
-        const map = new Map()
-        for (const s of computedSales) {
-            const k = keyFn(s)
-            if (!map.has(k)) map.set(k, { k, revenue: 0, profit: 0, rows: 0, units: 0 })
-            const agg = map.get(k)
-            agg.revenue += s._netView
-            agg.profit += s._profitView
-            agg.rows += 1
-            agg.units += s._qty
+    const heat = useMemo(() => {
+        const from = startOfLocalDay(heatYearBounds.from)
+        const to = endOfLocalDay(heatYearBounds.to)
+
+        const start = startOfLocalWeek(from)
+
+        const end = new Date(to)
+        const endDay = end.getDay()
+        const add = endDay === 0 ? 0 : 7 - endDay
+        const endAligned = endOfLocalDay(addDays(end, add))
+
+        const daysCount = Math.ceil((endAligned.getTime() - start.getTime()) / 86400000) + 1
+        const dayAgg = new Map()
+
+        for (const s of computedSalesYear) {
+            if (!s._dt) continue
+            const k = s._dayKey
+            if (!dayAgg.has(k)) dayAgg.set(k, { key: k, revenue: 0, profit: 0, units: 0, rows: 0 })
+            const a = dayAgg.get(k)
+            a.revenue += s._netView
+            a.profit += s._profitView
+            a.units += s._qty
+            a.rows += 1
         }
 
-        const arr = Array.from(map.values()).sort((a, b) => String(a.k).localeCompare(String(b.k)))
-        const maxRevenue = arr.reduce((m, x) => Math.max(m, x.revenue), 0)
-        const maxProfitAbs = arr.reduce((m, x) => Math.max(m, Math.abs(x.profit)), 0)
+        const allDays = []
+        for (let i = 0; i < daysCount; i++) {
+            const d = addDays(start, i)
+            const key = toISODate(d)
+            const inYearWindow = d.getTime() >= from.getTime() && d.getTime() <= to.getTime()
+            const a = dayAgg.get(key) || { key, revenue: 0, profit: 0, units: 0, rows: 0 }
+            allDays.push({ ...a, date: d, inYearWindow })
+        }
 
-        return { arr, maxRevenue, maxProfitAbs }
-    }, [computedSales, view])
+        // levels based on revenue (money made) across the YEAR (non-zero days)
+        const vals = allDays
+            .filter((d) => d.inYearWindow)
+            .map((d) => d.revenue)
+            .filter((v) => v > 0)
+            .sort((a, b) => a - b)
 
-    const byPlatform = useMemo(() => {
+        const q = (p) => {
+            if (vals.length === 0) return 0
+            const idx = Math.max(0, Math.min(vals.length - 1, Math.floor((vals.length - 1) * p)))
+            return vals[idx]
+        }
+        const t1 = q(0.2)
+        const t2 = q(0.4)
+        const t3 = q(0.6)
+        const t4 = q(0.8)
+
+        const getLevel = (revenue) => {
+            if (revenue <= 0) return 0
+            if (revenue <= t1) return 1
+            if (revenue <= t2) return 2
+            if (revenue <= t3) return 3
+            if (revenue <= t4) return 4
+            return 5
+        }
+
+        const withLevels = allDays.map((d) => ({
+            ...d,
+            level: getLevel(d.revenue),
+            weekdayIdx: (() => {
+                const js = d.date.getDay()
+                return js === 0 ? 6 : js - 1
+            })(),
+        }))
+
+        const weeks = []
+        for (let i = 0; i < withLevels.length; i += 7) {
+            const chunk = withLevels.slice(i, i + 7)
+            const days = new Array(7).fill(null).map((_, idx) => chunk.find((c) => c.weekdayIdx === idx) || null)
+
+            const first = chunk[0]?.date || null
+            const monthLabel = first && first.getDate() <= 7 ? monthLabelShort(first) : ""
+
+            weeks.push({
+                key: chunk[0]?.key || String(i),
+                monthLabel,
+                days: days.map((x) =>
+                    x || {
+                        key: `empty-${i}`,
+                        revenue: 0,
+                        profit: 0,
+                        units: 0,
+                        rows: 0,
+                        level: 0,
+                        date: null,
+                        inYearWindow: false,
+                    }
+                ),
+            })
+        }
+
+        return { weeks, from, to }
+    }, [computedSalesYear, heatYearBounds])
+
+    // Grey-out (not remove) days outside selected range while still showing the full-year heatmap canvas
+    const rangeMask = useMemo(() => {
+        const fromMs = rangeFrom.getTime()
+        const toMs = rangeTo.getTime()
+        return { fromMs, toMs }
+    }, [rangeFrom, rangeTo])
+
+    const isDisabledKey = (key) => {
+        if (!key || key.startsWith("empty-")) return true
+        const dt = new Date(`${key}T00:00:00`)
+        const t = dt.getTime()
+        if (!Number.isFinite(t)) return true
+        // inside year window?
+        if (t < heat.from.getTime() || t > heat.to.getTime()) return true
+        // outside selected range => grey-out but still visible
+        if (t < rangeMask.fromMs || t > rangeMask.toMs) return true
+        return false
+    }
+
+    /* ===================== Charts ===================== */
+
+    const platformCharts = useMemo(() => {
         const map = new Map()
         for (const s of computedSales) {
             const k = String(s.platform || "OTHER").toUpperCase()
             if (!map.has(k)) map.set(k, { k, revenue: 0, profit: 0, rows: 0, units: 0 })
-            const agg = map.get(k)
-            agg.revenue += s._netView
-            agg.profit += s._profitView
-            agg.rows += 1
-            agg.units += s._qty
+            const a = map.get(k)
+            a.revenue += s._netView
+            a.profit += s._profitView
+            a.rows += 1
+            a.units += s._qty
         }
-        const arr = Array.from(map.values()).sort((a, b) => b.revenue - a.revenue)
-        const max = arr.reduce((m, x) => Math.max(m, x.revenue), 0)
-        return { arr: arr.slice(0, 10), max }
-    }, [computedSales])
 
-    const byItem = useMemo(() => {
+        const arr = Array.from(map.values()).sort((a, b) => b.revenue - a.revenue)
+        const top = arr.slice(0, 6)
+        const total = top.reduce((t, x) => t + x.revenue, 0)
+
+        const palette = [
+            "rgba(16,185,129,0.85)",
+            "rgba(59,130,246,0.85)",
+            "rgba(168,85,247,0.85)",
+            "rgba(244,63,94,0.85)",
+            "rgba(245,158,11,0.85)",
+            "rgba(148,163,184,0.6)",
+        ]
+
+        const segments = top.map((x, i) => ({
+            label: x.k,
+            value: x.revenue,
+            colour: palette[i % palette.length],
+            right: total > 0 ? `${Math.round((x.revenue / total) * 100)}%` : "—",
+        }))
+
+        const maxRev = top.reduce((m, x) => Math.max(m, x.revenue), 0)
+
+        const bars = top.map((x) => ({
+            label: x.k,
+            value: x.revenue,
+            right: `${fmt(currencyView, Math.round(x.revenue))} • ${fmt(currencyView, Math.round(x.profit))}`,
+            rows: x.rows,
+            units: x.units,
+        }))
+
+        return { segments, total, maxRev, bars }
+    }, [computedSales, currencyView])
+
+    const categoryBars = useMemo(() => {
         const map = new Map()
         for (const s of computedSales) {
-            const name = String(s.itemName || s.item?.name || "—")
-            const k = `${String(s.itemId || "none")}::${name}`
-            if (!map.has(k)) map.set(k, { k, itemId: s.itemId || null, name, revenue: 0, profit: 0, rows: 0, units: 0 })
-            const agg = map.get(k)
-            agg.revenue += s._netView
-            agg.profit += s._profitView
-            agg.rows += 1
-            agg.units += s._qty
-        }
-        const arr = Array.from(map.values()).sort((a, b) => b.profit - a.profit)
-        const max = arr.reduce((m, x) => Math.max(m, x.profit), 0)
-        return { arr: arr.slice(0, Math.max(1, Math.min(25, topN))), max }
-    }, [computedSales, topN])
-
-    const inventorySnapshot = useMemo(() => {
-        // Best-effort: inventory value (purchaseSubtotalPence) + counts by status
-        let invValue = 0
-        let rows = 0
-        let units = 0
-        let listed = 0
-        let unlisted = 0
-        let sold = 0
-
-        for (const it of items) {
-            const q = safeNum(it.quantity, 0)
-            const cur = (it.currency || "GBP").toUpperCase()
-            const status = String(it.status || "UNLISTED").toUpperCase()
-
-            const perUnit = safeNum(it.purchaseSubtotalPence || it.costPence || 0, 0)
-            const total = Math.max(0, perUnit * q)
-
-            rows += 1
-            units += q
-
-            if (status === "LISTED") listed += 1
-            else if (status === "SOLD") sold += 1
-            else unlisted += 1
-
-            invValue += convertMinor(total, cur, currencyView, fx.rates).value
+            const k = String(s._category || "Other")
+            if (!map.has(k)) map.set(k, { k, revenue: 0, profit: 0, units: 0, rows: 0 })
+            const a = map.get(k)
+            a.revenue += s._netView
+            a.profit += s._profitView
+            a.units += s._qty
+            a.rows += 1
         }
 
-        return { invValue, rows, units, listed, unlisted, sold }
-    }, [items, currencyView, fx.rates])
+        const arr = Array.from(map.values()).sort((a, b) => b.profit - a.profit).slice(0, 6)
+        const max = arr.reduce((m, x) => Math.max(m, Math.max(0, x.profit)), 0)
 
-    const columnsSales = useMemo(
+        const bars = arr.map((x) => ({
+            label: x.k,
+            value: Math.max(0, x.profit),
+            right: `${fmt(currencyView, Math.round(x.profit))} • ${fmt(currencyView, Math.round(x.revenue))}`,
+            rows: x.rows,
+            units: x.units,
+        }))
+
+        return { bars, max }
+    }, [computedSales, currencyView])
+
+    /* ===================== Drill-down (move under heatmap) ===================== */
+
+    const selectedDaySales = useMemo(() => {
+        if (!selectedDayKey) return []
+        return computedSalesYear.filter((s) => s._dayKey === selectedDayKey).slice(0, 12)
+    }, [computedSalesYear, selectedDayKey])
+
+    const columnsDay = useMemo(
         () => [
-            { k: "item", t: "Item", w: "minmax(0,2fr)", render: (r) => <span className="truncate block">{r.itemName || r.item?.name || "—"}</span> },
+            {
+                k: "item",
+                t: "Item",
+                w: "minmax(0,2fr)",
+                render: (r) => <span className="truncate block">{r.itemName || r.item?.name || "—"}</span>,
+            },
+            { k: "cat", t: "Category", w: "140px", render: (r) => r._category || "Other" },
             { k: "platform", t: "Platform", w: "120px", render: (r) => String(r.platform || "—").toUpperCase() },
-            { k: "qty", t: "Qty", w: "80px", render: (r) => String(r._qty || 0) },
-            { k: "revenue", t: `Revenue (${currencyView})`, w: "160px", render: (r) => fmt(currencyView, r._netView) },
-            { k: "profit", t: `Profit (${currencyView})`, w: "160px", render: (r) => <span className={r._profitView >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>{fmt(currencyView, r._profitView)}</span> },
-            { k: "soldAt", t: "Sold at", w: "130px", render: (r) => (r.soldAt ? new Date(r.soldAt).toLocaleDateString() : "—") },
+            { k: "qty", t: "Qty", w: "70px", render: (r) => String(r._qty || 0) },
+            { k: "rev", t: `Revenue (${currencyView})`, w: "150px", render: (r) => fmt(currencyView, Math.round(r._netView)) },
+            {
+                k: "prof",
+                t: `Profit (${currencyView})`,
+                w: "150px",
+                render: (r) => (
+                    <span className={r._profitView >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>
+                        {fmt(currencyView, Math.round(r._profitView))}
+                    </span>
+                ),
+            },
         ],
         [currencyView]
     )
 
+    const onHoverCell = (e, cell) => {
+        if (!cell || !cell.key || cell.key.startsWith("empty-")) return
+        if (isDisabledKey(cell.key)) return
+
+        setTooltip({
+            open: true,
+            x: e.clientX,
+            y: e.clientY,
+            title: cell.key,
+            lines: [
+                { k: "Revenue", v: fmt(currencyView, Math.round(cell.revenue)), tone: "text-white" },
+                { k: "Profit", v: fmt(currencyView, Math.round(cell.profit)), tone: cell.profit >= 0 ? "text-emerald-200" : "text-red-200" },
+                { k: "Units", v: String(cell.units), tone: "text-white/85" },
+                { k: "Sales", v: String(cell.rows), tone: "text-white/85" },
+            ],
+        })
+    }
+
+    const onLeave = () => setTooltip((p) => ({ ...p, open: false }))
+
+    const onClickCell = (cell) => {
+        if (!cell || !cell.key || cell.key.startsWith("empty-")) return
+        if (isDisabledKey(cell.key)) return
+        setSelectedDayKey(cell.key)
+    }
+
+    const attribution = fx.attributionHtml || '<a href="https://www.exchangerate-api.com">Rates By Exchange Rate API</a>'
+
     return (
-        <div className="min-h-[calc(100vh-64px)] bg-gradient-to-b from-zinc-950 via-zinc-950 to-zinc-900 text-zinc-50">
-            <div className="mx-auto w-full max-w-[1400px] px-4 py-8">
-                <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <div className="min-h-[calc(100vh-64px)] bg-black text-zinc-50">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(900px_520px_at_18%_-10%,rgba(59,130,246,0.18),transparent),radial-gradient(900px_520px_at_82%_0%,rgba(16,185,129,0.14),transparent),radial-gradient(900px_520px_at_40%_120%,rgba(168,85,247,0.12),transparent)]" />
+
+            <Tooltip open={tooltip.open} x={tooltip.x} y={tooltip.y} title={tooltip.title} lines={tooltip.lines} />
+
+            <div className="relative mx-auto w-full max-w-[1200px] px-4 py-8">
+                {/* Header */}
+                <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
                     <div>
                         <h1 className="text-3xl font-semibold tracking-tight">Analytics</h1>
-                        <p className="mt-1 text-sm text-zinc-300">Trends, breakdowns, and performance across time.</p>
+                        <p className="mt-1 text-sm text-white/50">Heatmap stays on the year. Range filters grey-out days and updates the rest.</p>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
+                        <Link
+                            href="/program"
+                            className="h-10 rounded-2xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white/85 hover:bg-white/10 flex items-center"
+                        >
+                            Dashboard
+                        </Link>
+
                         <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
-                            <div className="text-xs font-semibold text-zinc-300">Display</div>
+                            <div className="text-xs font-semibold text-white/55">Display</div>
                             <select
                                 value={currencyView}
                                 onChange={(e) => setCurrencyView(e.target.value)}
@@ -496,188 +1003,166 @@ export default function AnalyticsPage() {
                 </div>
 
                 {err ? (
-                    <div className="mb-5 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+                    <div className="mb-6 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
                         {err}
                     </div>
                 ) : null}
 
+                {/* Controls */}
                 <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-wrap gap-2">
-                        <Pill active={range === "today"} onClick={() => setRange("today")}>Today</Pill>
-                        <Pill active={range === "week"} onClick={() => setRange("week")}>Week</Pill>
-                        <Pill active={range === "month"} onClick={() => setRange("month")}>Month</Pill>
-                        <Pill active={range === "year"} onClick={() => setRange("year")}>Year</Pill>
-                    </div>
+                    <Segmented
+                        value={range}
+                        onChange={(v) => {
+                            setRange(v)
+                            setSelectedDayKey(null)
+                        }}
+                        options={[
+                            { value: "today", label: "Today" },
+                            { value: "week", label: "Week" },
+                            { value: "month", label: "Month" },
+                            { value: "year", label: "Year" },
+                        ]}
+                    />
 
                     <div className="flex flex-wrap items-center gap-2">
-                        <div className="text-xs font-semibold text-zinc-300">Group</div>
+                        <div className="text-xs font-semibold text-white/55">Category</div>
                         <select
-                            value={view}
-                            onChange={(e) => setView(e.target.value)}
-                            className="h-10 rounded-2xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none"
+                            value={categoryFilter}
+                            onChange={(e) => {
+                                setCategoryFilter(e.target.value)
+                                setSelectedDayKey(null)
+                            }}
+                            className="h-10 rounded-2xl border border-white/10 bg-zinc-950/70 px-3 text-sm text-zinc-100 outline-none"
                         >
-                            <option value="day">Day</option>
-                            <option value="week">Week</option>
-                            <option value="month">Month</option>
-                        </select>
-
-                        <div className="ml-2 text-xs font-semibold text-zinc-300">Top</div>
-                        <select
-                            value={topN}
-                            onChange={(e) => setTopN(Number(e.target.value))}
-                            className="h-10 rounded-2xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none"
-                        >
-                            {[5, 8, 10, 15, 20, 25].map((n) => (
-                                <option key={n} value={n}>{n}</option>
+                            {categories.map((c) => (
+                                <option key={c} value={c} className="bg-zinc-950 text-zinc-100">
+                                    {c}
+                                </option>
                             ))}
                         </select>
                     </div>
                 </div>
 
+                {/* KPIs (profit + revenue first) */}
                 <div className="mb-6 grid gap-4 md:grid-cols-4">
-                    <Stat label="Sales (rows)" value={loading ? "—" : String(headline.rows)} sub="Records in period" />
-                    <Stat label="Units sold" value={loading ? "—" : String(headline.units)} sub="Sum of quantities" />
-                    <Stat label={`Revenue (${currencyView})`} value={loading ? "—" : fmt(currencyView, headline.revenue)} sub="Net sales (after fees)" good />
-                    <Stat label={`Profit (${currencyView})`} value={loading ? "—" : fmt(currencyView, headline.profit)} sub={`Margin ${headline.margin}%`} good={headline.profit >= 0} />
+                    <KPI
+                        label={`Profit (${currencyView})`}
+                        value={loading ? "—" : fmt(currencyView, Math.round(headline.profit))}
+                        sub={loading ? "—" : `Margin ${headline.margin}% • profit/unit ${fmt(currencyView, Math.round(headline.profitPerUnit))}`}
+                        tone={headline.profit >= 0 ? "good" : "bad"}
+                    />
+                    <KPI
+                        label={`Revenue (${currencyView})`}
+                        value={loading ? "—" : fmt(currencyView, Math.round(headline.revenue))}
+                        sub={loading ? "—" : `AOV ${fmt(currencyView, Math.round(headline.aov))}`}
+                        tone="good"
+                    />
+                    <KPI label="Units sold" value={loading ? "—" : String(headline.units)} sub="Sum of quantities" />
+                    <KPI label="Sales (rows)" value={loading ? "—" : String(headline.rows)} sub="Records in selected range" />
                 </div>
 
-                <div className="mb-6 grid gap-4 lg:grid-cols-3">
-                    <Card
-                        title="Trend"
-                        subtitle={`Grouped by ${view} • ${rangeFrom.toLocaleDateString()} → ${rangeTo.toLocaleDateString()}`}
-                        right={
-                            <Link href="/program/sales" className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/80 hover:bg-white/10">
-                                Open sales
-                            </Link>
-                        }
-                    >
+                {/* Heatmap + drilldown kept together */}
+                <Card
+                    title="Revenue heatmap (year)"
+                    subtitle={`Heatmap is fixed to this year • range greys out other dates • ${heat.from.toLocaleDateString()} → ${heat.to.toLocaleDateString()}`}
+                    right={<div className="text-xs text-white/45">{categoryFilter === "ALL" ? "All categories" : categoryFilter}</div>}
+                >
+                    {heat.weeks.length === 0 ? (
+                        <div className="text-sm text-white/55">No data.</div>
+                    ) : (
                         <div className="space-y-4">
-                            {series.arr.length === 0 ? (
-                                <div className="text-sm text-zinc-300">No sales in this period.</div>
-                            ) : (
-                                series.arr.map((x) => (
-                                    <div key={x.k} className="space-y-3">
-                                        <BarRow
-                                            label={x.k}
-                                            value={x.revenue}
-                                            max={series.maxRevenue}
-                                            right={`${fmt(currencyView, x.revenue)} • ${x.rows} sale(s)`}
-                                            tone="bg-white/20"
-                                        />
-                                        <BarRow
-                                            label="Profit"
-                                            value={Math.abs(x.profit)}
-                                            max={series.maxProfitAbs}
-                                            right={fmt(currencyView, x.profit)}
-                                            tone={x.profit >= 0 ? "bg-emerald-400/30" : "bg-red-400/30"}
-                                        />
+                            <HeatLegend labelLeft="Less" labelRight="More" />
+
+                            <Heatmap
+                                weeks={heat.weeks}
+                                onHoverCell={onHoverCell}
+                                onLeave={onLeave}
+                                onClickCell={onClickCell}
+                                selectedKey={selectedDayKey}
+                                isDisabledKey={isDisabledKey}
+                            />
+
+                            <div className="text-xs text-white/45">
+                                Darker = more revenue on that day. Grey squares are outside the selected range.
+                            </div>
+
+                            {/* Drilldown directly under heatmap */}
+                            <div className="mt-2 rounded-3xl border border-white/10 bg-zinc-950/20 p-4">
+                                <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                                    <div className="text-sm font-semibold text-white/90">
+                                        {selectedDayKey ? `Day drill-down: ${selectedDayKey}` : "Day drill-down"}
                                     </div>
-                                ))
-                            )}
-                        </div>
-                    </Card>
+                                    {selectedDayKey ? (
+                                        <button
+                                            type="button"
+                                            onClick={() => setSelectedDayKey(null)}
+                                            className="h-9 rounded-2xl border border-white/10 bg-white/5 px-3 text-xs font-semibold text-white/80 hover:bg-white/10"
+                                        >
+                                            Clear
+                                        </button>
+                                    ) : null}
+                                </div>
 
-                    <Card title="Platform performance" subtitle="Revenue and profit by platform">
-                        <div className="space-y-3">
-                            {byPlatform.arr.length === 0 ? (
-                                <div className="text-sm text-zinc-300">No platform data in this period.</div>
-                            ) : (
-                                byPlatform.arr.map((p) => (
-                                    <BarRow
-                                        key={p.k}
-                                        label={p.k}
-                                        value={p.revenue}
-                                        max={byPlatform.max}
-                                        right={`${fmt(currencyView, p.revenue)} • ${fmt(currencyView, p.profit)}`}
-                                        tone="bg-white/20"
+                                {selectedDayKey ? (
+                                    <Table
+                                        columns={columnsDay}
+                                        rows={selectedDaySales.map((r) => ({ ...r, _k: r.id }))}
+                                        emptyText="No sales on this day."
                                     />
-                                ))
-                            )}
-                        </div>
-                    </Card>
-
-                    <Card title="Inventory snapshot" subtitle="Current inventory (all items)">
-                        <div className="divide-y divide-white/10">
-                            <MiniRow label="Inventory rows" value={loading ? "—" : String(inventorySnapshot.rows)} />
-                            <MiniRow label="Total units" value={loading ? "—" : String(inventorySnapshot.units)} />
-                            <MiniRow label="Listed rows" value={loading ? "—" : String(inventorySnapshot.listed)} />
-                            <MiniRow label="Unlisted rows" value={loading ? "—" : String(inventorySnapshot.unlisted)} />
-                            <MiniRow label="Sold rows" value={loading ? "—" : String(inventorySnapshot.sold)} />
-                            <div className="pt-3">
-                                <div className="text-xs font-semibold text-zinc-300">Inventory value</div>
-                                <div className="mt-2 text-2xl font-semibold text-white">{loading ? "—" : fmt(currencyView, inventorySnapshot.invValue)}</div>
+                                ) : (
+                                    <div className="text-sm text-white/55">Click a square inside the selected range.</div>
+                                )}
                             </div>
                         </div>
-                    </Card>
-                </div>
+                    )}
+                </Card>
 
-                <div className="grid gap-4 lg:grid-cols-2">
-                    <Card title="Top items by profit" subtitle="Best performers (profit sum)">
-                        <div className="space-y-3">
-                            {byItem.arr.length === 0 ? (
-                                <div className="text-sm text-zinc-300">No item performance data in this period.</div>
-                            ) : (
-                                byItem.arr.map((it) => (
-                                    <div key={it.k} className="rounded-2xl border border-white/10 bg-zinc-950/30 p-4">
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div className="min-w-0">
-                                                <div className="truncate text-sm font-semibold text-white">{it.name}</div>
-                                                <div className="mt-1 text-xs text-zinc-400">
-                                                    {it.rows} sale(s) • {it.units} unit(s) • revenue {fmt(currencyView, it.revenue)}
-                                                </div>
-                                            </div>
-                                            <div className={["shrink-0 text-sm font-semibold", it.profit >= 0 ? "text-emerald-200" : "text-red-200"].join(" ")}>
-                                                {fmt(currencyView, it.profit)}
-                                            </div>
-                                        </div>
-                                        {it.itemId ? (
-                                            <div className="mt-3">
-                                                <Link
-                                                    href="/program/sales"
-                                                    className="inline-flex rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/80 hover:bg-white/10"
-                                                >
-                                                    View in sales →
-                                                </Link>
-                                            </div>
-                                        ) : null}
-                                    </div>
-                                ))
-                            )}
+                {/* Rest of analytics (same flow, no harsh separation) */}
+                <div className="mt-6 grid gap-4 lg:grid-cols-2">
+                    <Card title="Platform revenue split" subtitle="Pie shows revenue share. Bar shows revenue and profit per platform.">
+                        {platformCharts.segments.length === 0 ? (
+                            <div className="text-sm text-white/55">No platform data.</div>
+                        ) : (
+                            <div className="space-y-6">
+                                <Donut
+                                    segments={platformCharts.segments}
+                                    centreTop={fmt(currencyView, Math.round(platformCharts.total))}
+                                    centreBottom="platform revenue"
+                                />
+                                <Bars
+                                    title="Top platforms"
+                                    items={platformCharts.bars}
+                                    maxValue={platformCharts.maxRev}
+                                    tone="bg-white/20"
+                                    valueLabel={(it) => `${it.rows} sale(s) • ${it.units} unit(s)`}
+                                />
+                            </div>
+                        )}
+                    </Card>
+
+                    <Card title="Category performance" subtitle="Top categories by profit (selected range).">
+                        <Bars
+                            title="Top categories"
+                            items={categoryBars.bars}
+                            maxValue={categoryBars.max}
+                            tone="bg-emerald-400/30"
+                            valueLabel={(it) => `${it.rows} sale(s) • ${it.units} unit(s)`}
+                            rightKey="right"
+                        />
+                        <div className="mt-3 text-xs text-white/45">
+                            Profit bars use positive profit only for fill length (negative profit still shows in the label).
                         </div>
                     </Card>
-
-                    <Card title="Sales table" subtitle="Latest records in selected period">
-                        <Table
-                            columns={columnsSales}
-                            rows={computedSales.slice(0, 12).map((r) => ({
-                                ...r,
-                                _k: r.id,
-                            }))}
-                            emptyText="No sales to show."
-                        />
-                    </Card>
                 </div>
 
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-zinc-400">
+                <div className="mt-6 flex flex-wrap items-center justify-between gap-3 text-xs text-white/45">
                     <div>{fx.nextUpdateUtc ? `FX next update: ${fx.nextUpdateUtc}` : "FX next update: —"}</div>
                     <div className="flex items-center gap-2">
                         <span>Attribution:</span>
-                        <span
-                            className="text-zinc-300 underline underline-offset-2"
-                            dangerouslySetInnerHTML={{ __html: fx.attributionHtml || '<a href="https://www.exchangerate-api.com">Rates By Exchange Rate API</a>' }}
-                        />
+                        <span className="text-white/55 underline underline-offset-2" dangerouslySetInnerHTML={{ __html: attribution }} />
                     </div>
                 </div>
             </div>
         </div>
     )
-}
-
-// ISO week number helper
-function getISOWeek(date) {
-    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
-    const dayNum = d.getUTCDay() || 7
-    d.setUTCDate(d.getUTCDate() + 4 - dayNum)
-    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1))
-    return Math.ceil(((d - yearStart) / 86400000 + 1) / 7)
 }
