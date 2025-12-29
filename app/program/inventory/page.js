@@ -145,6 +145,18 @@ function normaliseMeta(meta) {
     }
 }
 
+/**
+ * ADDITION:
+ * When status is LISTED/SOLD, use the first listing that actually has a price (if any),
+ * instead of always using meta.listings[0] which might be a URL-only extra link.
+ */
+function pickListingForPrice(listings) {
+    const arr = Array.isArray(listings) ? listings : []
+    const firstWithPrice =
+        arr.find((l) => l?.pricePence != null && Number.isFinite(Number(l.pricePence)) && Number(l.pricePence) > 0) || null
+    return firstWithPrice || arr[0] || null
+}
+
 function compute(it) {
     const decoded = decodeNotes(it.notes)
     const meta = normaliseMeta(decoded.meta)
@@ -156,8 +168,8 @@ function compute(it) {
     const purchaseTotalPerUnit = meta.purchaseTotalPence > 0 ? meta.purchaseTotalPence : Number(it.costPence) || 0
     const purchaseTotal = purchaseTotalPerUnit * q
 
-    const firstListing = meta.listings?.[0] || null
-    const listingPricePerUnit = firstListing?.pricePence ?? null
+    const chosen = pickListingForPrice(meta.listings)
+    const listingPricePerUnit = chosen?.pricePence ?? null
 
     const salePricePerUnit =
         status === "LISTED" || status === "SOLD" ? listingPricePerUnit : meta.estimatedSalePence == null ? null : meta.estimatedSalePence
@@ -450,6 +462,24 @@ function buildListingsFromForm({ status, listingPlatform, listingUrl, listingPri
     return merged
 }
 
+/**
+ * ADDITION:
+ * Lightweight platform guesser (used by URL import UI).
+ */
+function guessPlatformFromUrl(url) {
+    const u = String(url || "").toLowerCase()
+    if (!u) return "OTHER"
+    if (u.includes("ebay.")) return "EBAY"
+    if (u.includes("vinted.")) return "VINTED"
+    if (u.includes("depop.")) return "DEPOP"
+    if (u.includes("stockx.")) return "STOCKX"
+    if (u.includes("goat.")) return "GOAT"
+    if (u.includes("grailed.")) return "GRAILED"
+    if (u.includes("facebook.com/marketplace") || u.includes("fb.com/marketplace")) return "FACEBOOK"
+    if (u.includes("etsy.")) return "ETSY"
+    return "OTHER"
+}
+
 export default function InventoryPage() {
     const [items, setItems] = useState([])
     const [loading, setLoading] = useState(true)
@@ -519,6 +549,12 @@ export default function InventoryPage() {
 
         notes: "",
     }))
+
+    /**
+     * ADDITION: URL import state (Add modal only)
+     */
+    const [importUrl, setImportUrl] = useState("")
+    const [importing, setImporting] = useState(false)
 
     const [editOpen, setEditOpen] = useState(false)
     const [editSaving, setEditSaving] = useState(false)
@@ -687,6 +723,8 @@ export default function InventoryPage() {
 
             notes: "",
         })
+        setImportUrl("")
+        setImporting(false)
         setAddOpen(true)
     }
 
@@ -713,6 +751,56 @@ export default function InventoryPage() {
         const arr = Array.isArray(addForm.listings) ? [...addForm.listings] : []
         arr.splice(idx, 1)
         onAddChange({ listings: arr })
+    }
+
+    /**
+     * ADDITION: URL Import handler
+     *
+     * IMPORTANT: your browser cannot reliably scrape eBay/Vinted pages directly because of CORS.
+     * This expects you to create an API route that fetches the HTML server-side and returns parsed data.
+     *
+     * Endpoint this calls (you create it):
+     *   GET /api/listing-import?url=<encoded>
+     * Response:
+     *   { ok: true, data: { title?: string, pricePence?: number, currency?: string, platform?: string, url?: string } }
+     */
+    const importFromUrlIntoAdd = async () => {
+        const raw = safeStr(importUrl)
+        if (!raw) return showToast("error", "Paste a listing URL")
+        const url = linkify(raw)
+        if (!url) return showToast("error", "Invalid URL")
+
+        const guessedPlatform = guessPlatformFromUrl(url)
+
+        setImporting(true)
+        try {
+            const res = await fetch(`/api/listing-import?url=${encodeURIComponent(url)}`, { cache: "no-store" })
+            const data = await res.json().catch(() => null)
+            if (!res.ok || !data?.ok) throw new Error(data?.error || `Import failed (${res.status})`)
+
+            const d = data?.data || {}
+
+            const title = safeStr(d.title) || ""
+            const platform = safeStr(d.platform).toUpperCase() || guessedPlatform
+            const pricePence = Number(d.pricePence)
+            const hasPrice = Number.isFinite(pricePence) && pricePence > 0
+
+            // Fill what we can, keep all existing fields untouched unless we have a better value.
+            setAddForm((p) => ({
+                ...p,
+                title: title || p.title,
+                status: "LISTED",
+                listingPlatform: PLATFORMS.some(([v]) => v === platform) ? platform : p.listingPlatform,
+                listingUrl: url,
+                listingPrice: hasPrice ? (pricePence / 100).toFixed(2) : p.listingPrice,
+            }))
+
+            showToast("ok", hasPrice ? "Imported listing (title + price)" : "Imported listing (title only)")
+        } catch (e) {
+            showToast("error", e?.message || "Import failed")
+        } finally {
+            setImporting(false)
+        }
     }
 
     const submitAdd = async (e) => {
@@ -1505,6 +1593,30 @@ export default function InventoryPage() {
                 >
                     <form id="rt-add-item" onSubmit={submitAdd} className="space-y-4">
                         <div className="grid gap-4 md:grid-cols-2">
+                            {/* ADDITION: Import from URL (does not remove anything) */}
+                            <div className="md:col-span-2 rounded-2xl border border-white/10 bg-zinc-950/30 p-4">
+                                <div className="text-xs font-semibold text-zinc-300">Import from listing URL</div>
+                                <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+                                    <input
+                                        value={importUrl}
+                                        onChange={(e) => setImportUrl(e.target.value)}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                        placeholder="Paste eBay / Vinted / Depop URL…"
+                                    />
+                                    <button
+                                        type="button"
+                                        disabled={importing}
+                                        onClick={importFromUrlIntoAdd}
+                                        className="h-11 shrink-0 rounded-2xl border border-white/10 bg-white/10 px-5 text-sm font-semibold text-white hover:bg-white/15 disabled:opacity-60"
+                                    >
+                                        {importing ? "Importing…" : "Import"}
+                                    </button>
+                                </div>
+                                <div className="mt-2 text-[11px] text-zinc-400">
+                                    This fills what it can (title, listing link, and price if available) and sets the item to <span className="font-semibold text-zinc-200">Listed</span>.
+                                </div>
+                            </div>
+
                             <Field label="Title *" className="md:col-span-2">
                                 <input
                                     value={addForm.title}
