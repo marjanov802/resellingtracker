@@ -470,6 +470,7 @@ export default function AnalyticsPage() {
 
     const [tooltip, setTooltip] = useState({ open: false, x: 0, y: 0, title: "", lines: [] })
     const [selectedDayKey, setSelectedDayKey] = useState(null)
+    const [heatMetric, setHeatMetric] = useState("revenue") // revenue | spend
 
     useEffect(() => {
         if (typeof window !== "undefined") localStorage.setItem("rt_currency_view", currencyView)
@@ -593,6 +594,7 @@ export default function AnalyticsPage() {
 
                 const netView = convertMinor(netPence, cur, currencyView, fx.rates).value
                 const profitView = convertMinor(profitPence, cur, currencyView, fx.rates).value
+                const costView = convertMinor(costTotal, cur, currencyView, fx.rates).value
 
                 const itemId = s.itemId != null ? String(s.itemId) : null
                 const itemRow = itemId ? itemById.get(itemId) : null
@@ -605,6 +607,7 @@ export default function AnalyticsPage() {
                     _dayKey: x.dt ? toISODate(x.dt) : "—",
                     _netView: netView,
                     _profitView: profitView,
+                    _costView: costView,
                     _qty: qty,
                     _category: category,
                 }
@@ -647,6 +650,7 @@ export default function AnalyticsPage() {
 
                 const netView = convertMinor(netPence, cur, currencyView, fx.rates).value
                 const profitView = convertMinor(profitPence, cur, currencyView, fx.rates).value
+                const costView = convertMinor(costTotal, cur, currencyView, fx.rates).value
 
                 const itemId = s.itemId != null ? String(s.itemId) : null
                 const itemRow = itemId ? itemById.get(itemId) : null
@@ -659,6 +663,7 @@ export default function AnalyticsPage() {
                     _dayKey: x.dt ? toISODate(x.dt) : "—",
                     _netView: netView,
                     _profitView: profitView,
+                    _costView: costView,
                     _qty: qty,
                     _category: category,
                 }
@@ -712,9 +717,10 @@ export default function AnalyticsPage() {
         for (const s of computedSalesYear) {
             if (!s._dt) continue
             const k = s._dayKey
-            if (!dayAgg.has(k)) dayAgg.set(k, { key: k, revenue: 0, profit: 0, units: 0, rows: 0 })
+            if (!dayAgg.has(k)) dayAgg.set(k, { key: k, revenue: 0, spend: 0, profit: 0, units: 0, rows: 0 })
             const a = dayAgg.get(k)
             a.revenue += s._netView
+            a.spend += safeNum(s._costView, 0)
             a.profit += s._profitView
             a.units += s._qty
             a.rows += 1
@@ -725,14 +731,15 @@ export default function AnalyticsPage() {
             const d = addDays(start, i)
             const key = toISODate(d)
             const inYearWindow = d.getTime() >= from.getTime() && d.getTime() <= to.getTime()
-            const a = dayAgg.get(key) || { key, revenue: 0, profit: 0, units: 0, rows: 0 }
+            const a = dayAgg.get(key) || { key, revenue: 0, spend: 0, profit: 0, units: 0, rows: 0 }
             allDays.push({ ...a, date: d, inYearWindow })
         }
 
-        // levels based on revenue (money made) across the YEAR (non-zero days)
+        // levels based on selected metric across the YEAR (non-zero days)
+        const metricKey = heatMetric === "spend" ? "spend" : "revenue"
         const vals = allDays
             .filter((d) => d.inYearWindow)
-            .map((d) => d.revenue)
+            .map((d) => safeNum(d[metricKey], 0))
             .filter((v) => v > 0)
             .sort((a, b) => a - b)
 
@@ -746,18 +753,18 @@ export default function AnalyticsPage() {
         const t3 = q(0.6)
         const t4 = q(0.8)
 
-        const getLevel = (revenue) => {
-            if (revenue <= 0) return 0
-            if (revenue <= t1) return 1
-            if (revenue <= t2) return 2
-            if (revenue <= t3) return 3
-            if (revenue <= t4) return 4
+        const getLevel = (v) => {
+            if (v <= 0) return 0
+            if (v <= t1) return 1
+            if (v <= t2) return 2
+            if (v <= t3) return 3
+            if (v <= t4) return 4
             return 5
         }
 
         const withLevels = allDays.map((d) => ({
             ...d,
-            level: getLevel(d.revenue),
+            level: getLevel(safeNum(d[metricKey], 0)),
             weekdayIdx: (() => {
                 const js = d.date.getDay()
                 return js === 0 ? 6 : js - 1
@@ -775,38 +782,37 @@ export default function AnalyticsPage() {
             weeks.push({
                 key: chunk[0]?.key || String(i),
                 monthLabel,
-                days: days.map((x) =>
-                    x || {
-                        key: `empty-${i}`,
-                        revenue: 0,
-                        profit: 0,
-                        units: 0,
-                        rows: 0,
-                        level: 0,
-                        date: null,
-                        inYearWindow: false,
-                    }
+                days: days.map(
+                    (x) =>
+                        x || {
+                            key: `empty-${i}`,
+                            revenue: 0,
+                            spend: 0,
+                            profit: 0,
+                            units: 0,
+                            rows: 0,
+                            date: new Date(),
+                            inYearWindow: false,
+                            level: 0,
+                            weekdayIdx: 0,
+                        }
                 ),
             })
         }
 
-        return { weeks, from, to }
-    }, [computedSalesYear, heatYearBounds])
+        return { from, to, weeks }
+    }, [computedSalesYear, heatYearBounds, heatMetric])
 
-    // Grey-out (not remove) days outside selected range while still showing the full-year heatmap canvas
     const rangeMask = useMemo(() => {
-        const fromMs = rangeFrom.getTime()
-        const toMs = rangeTo.getTime()
-        return { fromMs, toMs }
-    }, [rangeFrom, rangeTo])
+        const b = getRangeBounds(range)
+        return { fromMs: b.from.getTime(), toMs: b.to.getTime() }
+    }, [range])
 
     const isDisabledKey = (key) => {
         if (!key || key.startsWith("empty-")) return true
-        const dt = new Date(`${key}T00:00:00`)
-        const t = dt.getTime()
-        if (!Number.isFinite(t)) return true
-        // inside year window?
-        if (t < heat.from.getTime() || t > heat.to.getTime()) return true
+        const d = new Date(key)
+        const t = d.getTime()
+        if (Number.isNaN(t)) return true
         // outside selected range => grey-out but still visible
         if (t < rangeMask.fromMs || t > rangeMask.toMs) return true
         return false
@@ -871,7 +877,9 @@ export default function AnalyticsPage() {
             a.rows += 1
         }
 
-        const arr = Array.from(map.values()).sort((a, b) => b.profit - a.profit).slice(0, 6)
+        const arr = Array.from(map.values())
+            .sort((a, b) => b.profit - a.profit)
+            .slice(0, 6)
         const max = arr.reduce((m, x) => Math.max(m, Math.max(0, x.profit)), 0)
 
         const bars = arr.map((x) => ({
@@ -928,8 +936,17 @@ export default function AnalyticsPage() {
             y: e.clientY,
             title: cell.key,
             lines: [
-                { k: "Revenue", v: fmt(currencyView, Math.round(cell.revenue)), tone: "text-white" },
-                { k: "Profit", v: fmt(currencyView, Math.round(cell.profit)), tone: cell.profit >= 0 ? "text-emerald-200" : "text-red-200" },
+                ...(heatMetric === "spend"
+                    ? [{ k: "Spend", v: fmt(currencyView, Math.round(cell.spend)), tone: "text-white" }]
+                    : [{ k: "Revenue", v: fmt(currencyView, Math.round(cell.revenue)), tone: "text-white" }]),
+                {
+                    k: "Profit",
+                    v: fmt(currencyView, Math.round(cell.profit)),
+                    tone: cell.profit >= 0 ? "text-emerald-200" : "text-red-200",
+                },
+                ...(heatMetric === "spend"
+                    ? [{ k: "Revenue", v: fmt(currencyView, Math.round(cell.revenue)), tone: "text-white/70" }]
+                    : [{ k: "Spend", v: fmt(currencyView, Math.round(cell.spend)), tone: "text-white/70" }]),
                 { k: "Units", v: String(cell.units), tone: "text-white/85" },
                 { k: "Sales", v: String(cell.rows), tone: "text-white/85" },
             ],
@@ -957,7 +974,9 @@ export default function AnalyticsPage() {
                 <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
                     <div>
                         <h1 className="text-3xl font-semibold tracking-tight">Analytics</h1>
-                        <p className="mt-1 text-sm text-white/50">Heatmap stays on the year. Range filters grey-out days and updates the rest.</p>
+                        <p className="mt-1 text-sm text-white/50">
+                            Heatmap stays on the year. Range filters grey-out days and updates the rest.
+                        </p>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
@@ -1063,9 +1082,21 @@ export default function AnalyticsPage() {
 
                 {/* Heatmap + drilldown kept together */}
                 <Card
-                    title="Revenue heatmap (year)"
+                    title={`${heatMetric === "spend" ? "Inventory spend" : "Revenue"} heatmap (year)`}
                     subtitle={`Heatmap is fixed to this year • range greys out other dates • ${heat.from.toLocaleDateString()} → ${heat.to.toLocaleDateString()}`}
-                    right={<div className="text-xs text-white/45">{categoryFilter === "ALL" ? "All categories" : categoryFilter}</div>}
+                    right={
+                        <div className="flex flex-wrap items-center gap-2">
+                            <Segmented
+                                value={heatMetric}
+                                onChange={setHeatMetric}
+                                options={[
+                                    { value: "revenue", label: "Revenue" },
+                                    { value: "spend", label: "Spend" },
+                                ]}
+                            />
+                            <div className="text-xs text-white/45">{categoryFilter === "ALL" ? "All categories" : categoryFilter}</div>
+                        </div>
+                    }
                 >
                     {heat.weeks.length === 0 ? (
                         <div className="text-sm text-white/55">No data.</div>
@@ -1083,7 +1114,9 @@ export default function AnalyticsPage() {
                             />
 
                             <div className="text-xs text-white/45">
-                                Darker = more revenue on that day. Grey squares are outside the selected range.
+                                {heatMetric === "spend"
+                                    ? "Darker = more spend on that day. Grey squares are outside the selected range."
+                                    : "Darker = more revenue on that day. Grey squares are outside the selected range."}
                             </div>
 
                             {/* Drilldown directly under heatmap */}

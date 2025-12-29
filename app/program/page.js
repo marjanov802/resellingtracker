@@ -90,7 +90,13 @@ function normaliseMeta(meta) {
     const legacyWorst = m.expectedWorstPence == null ? null : Number(m.expectedWorstPence)
 
     const estimatedFromLegacy =
-        estimatedSalePence != null ? estimatedSalePence : legacyBest != null ? legacyBest : legacyWorst != null ? legacyWorst : null
+        estimatedSalePence != null
+            ? estimatedSalePence
+            : legacyBest != null
+                ? legacyBest
+                : legacyWorst != null
+                    ? legacyWorst
+                    : null
 
     const listings = Array.isArray(m.listings)
         ? m.listings
@@ -204,7 +210,12 @@ function getRangeBounds(timeRange) {
 
 function StatCard({ label, value, sub, className = "", icon }) {
     return (
-        <div className={["relative overflow-hidden rounded-3xl border border-white/10 bg-white/5 p-6 shadow-[0_0_0_1px_rgba(255,255,255,0.04)]", className].join(" ")}>
+        <div
+            className={[
+                "relative overflow-hidden rounded-3xl border border-white/10 bg-white/5 p-6 shadow-[0_0_0_1px_rgba(255,255,255,0.04)]",
+                className,
+            ].join(" ")}
+        >
             <div className="flex items-start justify-between gap-3">
                 <div>
                     <p className="text-white/60 text-sm font-semibold">{label}</p>
@@ -243,22 +254,45 @@ function RangePills({ value, onChange }) {
     )
 }
 
+// FIX: responsive modal (no overflow on smaller screens), internal scroll, body scroll lock
 function Modal({ title, onClose, children, footer, maxWidth = "max-w-5xl" }) {
+    useEffect(() => {
+        const prev = document.body.style.overflow
+        document.body.style.overflow = "hidden"
+        return () => {
+            document.body.style.overflow = prev
+        }
+    }, [])
+
     return (
         <div className="fixed inset-0 z-50 flex items-end justify-center p-4 sm:items-center">
             <button aria-label="Close" onClick={onClose} className="absolute inset-0 bg-black/70" />
-            <div className={["relative w-full rounded-3xl border border-white/10 bg-zinc-950/90 p-5 shadow-2xl backdrop-blur", maxWidth].join(" ")}>
-                <div className="mb-4 flex items-start justify-between gap-4">
-                    <div className="text-lg font-semibold text-white">{title}</div>
-                    <button
-                        onClick={onClose}
-                        className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10"
-                    >
-                        Close
-                    </button>
+
+            <div
+                className={[
+                    "relative w-full overflow-hidden rounded-3xl border border-white/10 bg-zinc-950/90 shadow-2xl backdrop-blur",
+                    "max-h-[calc(100vh-2rem)]",
+                    maxWidth,
+                    "flex flex-col",
+                ].join(" ")}
+            >
+                <div className="shrink-0 p-5">
+                    <div className="flex items-start justify-between gap-4">
+                        <div className="text-lg font-semibold text-white">{title}</div>
+                        <button
+                            onClick={onClose}
+                            className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10"
+                        >
+                            Close
+                        </button>
+                    </div>
                 </div>
-                <div>{children}</div>
-                {footer ? <div className="mt-5">{footer}</div> : null}
+
+                <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5">
+                    <div className="min-w-0">{children}</div>
+                </div>
+
+                {footer ? <div className="shrink-0 border-t border-white/10 p-5">{footer}</div> : null}
             </div>
         </div>
     )
@@ -287,21 +321,23 @@ function BarChart({ title, rows, currencyView }) {
             ) : (
                 <div className="space-y-3">
                     {rows.map((r) => {
-                        const pct = Math.round((Math.min(1, Math.abs(r.valueMinor) / maxAbs) * 100) * 100) / 100
+                        const pct = Math.round(Math.min(1, Math.abs(r.valueMinor) / maxAbs) * 100 * 100) / 100
                         const negative = (r.valueMinor || 0) < 0
                         return (
                             <div key={r.label} className="grid grid-cols-[92px_1fr_120px] items-center gap-3">
                                 <div className="text-xs font-semibold text-white/80 truncate">{r.label}</div>
                                 <div className="h-3 rounded-full bg-white/10 overflow-hidden">
                                     <div
-                                        className={[
-                                            "h-full rounded-full",
-                                            negative ? "bg-red-400/70" : "bg-emerald-300/80",
-                                        ].join(" ")}
+                                        className={["h-full rounded-full", negative ? "bg-red-400/70" : "bg-emerald-300/80"].join(" ")}
                                         style={{ width: `${pct}%` }}
                                     />
                                 </div>
-                                <div className={["text-right text-xs font-semibold", negative ? "text-red-200" : "text-emerald-200"].join(" ")}>
+                                <div
+                                    className={[
+                                        "text-right text-xs font-semibold",
+                                        negative ? "text-red-200" : "text-emerald-200",
+                                    ].join(" ")}
+                                >
                                     {fmt(currencyView, r.valueMinor)}
                                 </div>
                             </div>
@@ -348,7 +384,10 @@ function DonutChart({ title, segments, subtitle }) {
 
                 <div className="flex-1 space-y-2">
                     {segments.map((s) => (
-                        <div key={s.label} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-zinc-950/40 px-3 py-2">
+                        <div
+                            key={s.label}
+                            className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-zinc-950/40 px-3 py-2"
+                        >
                             <div className="flex items-center gap-2 min-w-0">
                                 <span className="h-2.5 w-2.5 rounded-full" style={{ background: s.colour }} />
                                 <div className="text-sm font-semibold text-white/85 truncate">{s.label}</div>
@@ -661,9 +700,7 @@ export default function ProgramDashboard() {
         }))
 
         if (segs.length === 0) {
-            return [
-                { label: "No sales", value: 1, colour: "rgba(148,163,184,0.3)" },
-            ]
+            return [{ label: "No sales", value: 1, colour: "rgba(148,163,184,0.3)" }]
         }
 
         return segs
@@ -844,7 +881,10 @@ export default function ProgramDashboard() {
         return items.find((x) => String(x.id) === String(id)) || null
     }, [saleForm.itemId, items])
 
-    const selectedSaleItemComputed = useMemo(() => (selectedSaleItem ? computeItem(selectedSaleItem) : null), [selectedSaleItem])
+    const selectedSaleItemComputed = useMemo(
+        () => (selectedSaleItem ? computeItem(selectedSaleItem) : null),
+        [selectedSaleItem]
+    )
 
     const sellQty = Math.max(0, safeInt(saleForm.quantitySold, 0))
     const sellPricePerUnitPence = parseMoneyToPence(saleForm.salePricePerUnit)
@@ -1295,7 +1335,8 @@ export default function ProgramDashboard() {
                             <div className="md:col-span-2 rounded-3xl border border-white/10 bg-zinc-950/40 p-4">
                                 <div className="text-sm font-semibold text-white">Listings</div>
                                 <div className="mt-1 text-xs text-zinc-300">
-                                    Only used when Status is <span className="font-semibold">Listed</span> or <span className="font-semibold">Sold</span>.
+                                    Only used when Status is <span className="font-semibold">Listed</span> or{" "}
+                                    <span className="font-semibold">Sold</span>.
                                 </div>
 
                                 <div className="mt-3 grid gap-3 md:grid-cols-3">
@@ -1356,7 +1397,9 @@ export default function ProgramDashboard() {
                                                 <div className="text-xs text-white/80">
                                                     <span className="font-semibold">{String(l.platform || "OTHER")}</span>
                                                     {l.pricePence != null ? (
-                                                        <span className="ml-2 text-emerald-200 font-semibold">{fmt(currencyView, Number(l.pricePence) || 0)}</span>
+                                                        <span className="ml-2 text-emerald-200 font-semibold">
+                                                            {fmt(currencyView, Number(l.pricePence) || 0)}
+                                                        </span>
                                                     ) : null}
                                                     {l.url ? <span className="ml-2 text-white/50 truncate">{l.url}</span> : null}
                                                 </div>
@@ -1420,7 +1463,8 @@ export default function ProgramDashboard() {
                                 >
                                     {inventoryOptions.map(({ it, c }) => (
                                         <option key={String(it.id)} value={String(it.id)}>
-                                            {String(it.name || "Untitled")} • Qty {Number(it.quantity) || 0} • {String(c.status || "UNLISTED")}
+                                            {String(it.name || "Untitled")} • Qty {Number(it.quantity) || 0} •{" "}
+                                            {String(c.status || "UNLISTED")}
                                         </option>
                                     ))}
                                 </select>
@@ -1472,7 +1516,9 @@ export default function ProgramDashboard() {
                                 <div className="flex flex-wrap items-center justify-between gap-3">
                                     <div>
                                         <div className="text-sm font-semibold text-white">Remove from inventory</div>
-                                        <div className="mt-1 text-xs text-zinc-300">After saving the sale, apply the inventory change automatically.</div>
+                                        <div className="mt-1 text-xs text-zinc-300">
+                                            After saving the sale, apply the inventory change automatically.
+                                        </div>
                                     </div>
 
                                     <label className="inline-flex items-center gap-2">
@@ -1516,7 +1562,8 @@ export default function ProgramDashboard() {
 
                                         {saleForm.removeMode === "DELETE" ? (
                                             <div className="sm:col-span-2 text-xs text-zinc-300">
-                                                Delete will remove the entire inventory row (even if only some units are sold). Decrement is recommended.
+                                                Delete will remove the entire inventory row (even if only some units are sold). Decrement is
+                                                recommended.
                                             </div>
                                         ) : null}
                                     </div>
@@ -1543,7 +1590,10 @@ export default function ProgramDashboard() {
                                                 sellGrossPence - purchaseTotalForSoldUnitsPence >= 0 ? "text-emerald-200" : "text-red-200",
                                             ].join(" ")}
                                         >
-                                            {fmt(selectedSaleItemComputed?.cur || currencyView, sellGrossPence - purchaseTotalForSoldUnitsPence)}
+                                            {fmt(
+                                                selectedSaleItemComputed?.cur || currencyView,
+                                                sellGrossPence - purchaseTotalForSoldUnitsPence
+                                            )}
                                         </div>
                                     </div>
                                 </div>
