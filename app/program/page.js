@@ -1,5 +1,4 @@
 // app/program/page.js
-// :contentReference[oaicite:0]{index=0}
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
@@ -198,12 +197,65 @@ function startOfLocalYear(d) {
     x.setMonth(0, 1)
     return x
 }
-function getRangeBounds(timeRange) {
-    const now = new Date()
-    if (timeRange === "today") return { from: startOfLocalDay(now), to: endOfLocalDay(now) }
-    if (timeRange === "week") return { from: startOfLocalWeek(now), to: endOfLocalDay(now) }
-    if (timeRange === "month") return { from: startOfLocalMonth(now), to: endOfLocalDay(now) }
-    return { from: startOfLocalYear(now), to: endOfLocalDay(now) }
+
+const toDateInput = (d) => {
+    if (!d || Number.isNaN(d.getTime())) return ""
+    const yyyy = d.getFullYear()
+    const mm = String(d.getMonth() + 1).padStart(2, "0")
+    const dd = String(d.getDate()).padStart(2, "0")
+    return `${yyyy}-${mm}-${dd}`
+}
+
+const parseDateInputToLocalRange = (fromYmd, toYmd) => {
+    const from = String(fromYmd || "").trim()
+    const to = String(toYmd || "").trim()
+    if (!from && !to) return { from: null, to: null }
+
+    const fromDate = from ? new Date(`${from}T00:00:00`) : null
+    const toDate = to ? new Date(`${to}T23:59:59`) : null
+
+    return {
+        from: fromDate && !Number.isNaN(fromDate.getTime()) ? fromDate : null,
+        to: toDate && !Number.isNaN(toDate.getTime()) ? toDate : null,
+    }
+}
+
+function getBoundsForPeriod(period, anchorDate, customRange) {
+    const ref = anchorDate || new Date()
+
+    if (period === "range") {
+        const r = parseDateInputToLocalRange(customRange?.from, customRange?.to)
+        const from = r.from ? startOfLocalDay(r.from) : startOfLocalDay(ref)
+        const to = r.to ? endOfLocalDay(r.to) : endOfLocalDay(ref)
+        return { from, to }
+    }
+
+    if (period === "day") return { from: startOfLocalDay(ref), to: endOfLocalDay(ref) }
+    if (period === "week") return { from: startOfLocalWeek(ref), to: endOfLocalDay(new Date(startOfLocalWeek(ref).getTime() + 6 * 86400000)) }
+    if (period === "month") return { from: startOfLocalMonth(ref), to: endOfLocalDay(new Date(ref.getFullYear(), ref.getMonth() + 1, 0)) }
+    return { from: startOfLocalYear(ref), to: endOfLocalDay(new Date(ref.getFullYear(), 11, 31)) }
+}
+
+function formatPeriodLabel(period, anchorDate, customRange) {
+    const ref = anchorDate || new Date()
+
+    if (period === "range") {
+        const { from, to } = parseDateInputToLocalRange(customRange?.from, customRange?.to)
+        if (!from && !to) return "—"
+        const f = from ? from.toLocaleDateString() : "—"
+        const t = to ? to.toLocaleDateString() : "—"
+        return `${f} – ${t}`
+    }
+
+    if (period === "day") return ref.toLocaleDateString()
+    if (period === "week") {
+        const s = startOfLocalWeek(ref)
+        const e = new Date(s)
+        e.setDate(s.getDate() + 6)
+        return `${s.toLocaleDateString()} – ${e.toLocaleDateString()}`
+    }
+    if (period === "month") return `${ref.toLocaleString(undefined, { month: "long" })} ${ref.getFullYear()}`
+    return String(ref.getFullYear())
 }
 
 /* ============================== UI =================================== */
@@ -233,23 +285,60 @@ function StatCard({ label, value, sub, className = "", icon }) {
     )
 }
 
-function RangePills({ value, onChange }) {
+function PeriodControls({ period, onPeriodChange, anchorDateYmd, onAnchorDateChange, customRange, onCustomRangeChange, label }) {
     return (
-        <div className="mb-7 flex flex-wrap gap-2">
-            {["today", "week", "month", "year"].map((range) => (
-                <button
-                    key={range}
-                    onClick={() => onChange(range)}
-                    className={[
-                        "px-4 py-2 rounded-2xl text-sm font-semibold transition border",
-                        value === range
-                            ? "bg-white text-black border-white/10"
-                            : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white border-white/10",
-                    ].join(" ")}
-                >
-                    {range.charAt(0).toUpperCase() + range.slice(1)}
-                </button>
-            ))}
+        <div className="mb-7 flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap gap-2">
+                    {["day", "week", "month", "year", "range"].map((p) => (
+                        <button
+                            key={p}
+                            onClick={() => onPeriodChange(p)}
+                            className={[
+                                "px-4 py-2 rounded-2xl text-sm font-semibold transition border",
+                                period === p
+                                    ? "bg-white text-black border-white/10"
+                                    : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white border-white/10",
+                            ].join(" ")}
+                        >
+                            {p === "range" ? "Custom" : p.charAt(0).toUpperCase() + p.slice(1)}
+                        </button>
+                    ))}
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/60">
+                    Showing: <span className="font-semibold text-white">{label}</span>
+                </div>
+            </div>
+
+            {period === "range" ? (
+                <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+                    <div className="text-xs font-semibold text-zinc-300">From</div>
+                    <input
+                        type="date"
+                        value={customRange.from}
+                        onChange={(e) => onCustomRangeChange((p) => ({ ...p, from: e.target.value }))}
+                        className="h-9 rounded-xl border border-white/10 bg-zinc-950/60 px-2 text-sm text-white outline-none"
+                    />
+                    <div className="text-xs font-semibold text-zinc-300">To</div>
+                    <input
+                        type="date"
+                        value={customRange.to}
+                        onChange={(e) => onCustomRangeChange((p) => ({ ...p, to: e.target.value }))}
+                        className="h-9 rounded-xl border border-white/10 bg-zinc-950/60 px-2 text-sm text-white outline-none"
+                    />
+                </div>
+            ) : (
+                <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+                    <div className="text-xs font-semibold text-zinc-300">{period === "week" ? "Week of" : "Date"}</div>
+                    <input
+                        type="date"
+                        value={anchorDateYmd}
+                        onChange={(e) => onAnchorDateChange(e.target.value)}
+                        className="h-9 rounded-xl border border-white/10 bg-zinc-950/60 px-2 text-sm text-white outline-none"
+                    />
+                </div>
+            )}
         </div>
     )
 }
@@ -321,7 +410,7 @@ function BarChart({ title, rows, currencyView }) {
             ) : (
                 <div className="space-y-3">
                     {rows.map((r) => {
-                        const pct = Math.round(Math.min(1, Math.abs(r.valueMinor) / maxAbs) * 100 * 100) / 100
+                        const pct = Math.round(Math.min(1, Math.abs(r.valueMinor || 0) / maxAbs) * 100 * 100) / 100
                         const negative = (r.valueMinor || 0) < 0
                         return (
                             <div key={r.label} className="grid grid-cols-[92px_1fr_120px] items-center gap-3">
@@ -404,7 +493,26 @@ function DonutChart({ title, segments, subtitle }) {
 /* =========================== Page component =========================== */
 
 export default function ProgramDashboard() {
-    const [timeRange, setTimeRange] = useState("week")
+    const [period, setPeriod] = useState("week") // day|week|month|year|range
+
+    const [anchorDateYmd, setAnchorDateYmd] = useState(() => toDateInput(new Date()))
+    const [customRange, setCustomRange] = useState(() => {
+        const now = new Date()
+        const s = startOfLocalWeek(now)
+        const e = new Date(s)
+        e.setDate(s.getDate() + 6)
+        return { from: toDateInput(s), to: toDateInput(e) }
+    })
+
+    const anchorDate = useMemo(() => {
+        const ymd = String(anchorDateYmd || "").trim()
+        if (!ymd) return new Date()
+        const d = new Date(`${ymd}T12:00:00`)
+        return Number.isNaN(d.getTime()) ? new Date() : d
+    }, [anchorDateYmd])
+
+    const { from, to } = useMemo(() => getBoundsForPeriod(period, anchorDate, customRange), [period, anchorDate, customRange])
+    const periodLabel = useMemo(() => formatPeriodLabel(period, anchorDate, customRange), [period, anchorDate, customRange])
 
     const [items, setItems] = useState([])
     const [sales, setSales] = useState([])
@@ -528,8 +636,6 @@ export default function ProgramDashboard() {
         loadFx()
     }, [])
 
-    const { from, to } = useMemo(() => getRangeBounds(timeRange), [timeRange])
-
     const computedItems = useMemo(() => items.map((it) => ({ it, c: computeItem(it) })), [items])
 
     const inventoryStats = useMemo(() => {
@@ -600,8 +706,12 @@ export default function ProgramDashboard() {
     }, [salesInRange, currencyView, fx.rates])
 
     const recentSales = useMemo(() => {
+        const fromMs = from.getTime()
+        const toMs = to.getTime()
+
         const sorted = [...sales]
             .map((s) => ({ s, t: s.soldAt ? new Date(s.soldAt).getTime() : 0 }))
+            .filter(({ t }) => t >= fromMs && t <= toMs)
             .sort((a, b) => b.t - a.t)
             .slice(0, 6)
             .map(({ s }) => {
@@ -639,7 +749,7 @@ export default function ProgramDashboard() {
             })
 
         return sorted
-    }, [sales, currencyView, fx.rates])
+    }, [sales, from, to, currencyView, fx.rates])
 
     const profitByPlatform = useMemo(() => {
         const map = new Map()
@@ -1050,8 +1160,16 @@ export default function ProgramDashboard() {
                     </div>
                 </div>
 
-                {/* Range */}
-                <RangePills value={timeRange} onChange={setTimeRange} />
+                {/* Period */}
+                <PeriodControls
+                    period={period}
+                    onPeriodChange={setPeriod}
+                    anchorDateYmd={anchorDateYmd}
+                    onAnchorDateChange={setAnchorDateYmd}
+                    customRange={customRange}
+                    onCustomRangeChange={setCustomRange}
+                    label={periodLabel}
+                />
 
                 {/* Stats */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -1153,7 +1271,7 @@ export default function ProgramDashboard() {
                             {loadingSales ? (
                                 <div className="p-4 text-white/60 text-sm">Loading…</div>
                             ) : recentSales.length === 0 ? (
-                                <div className="p-4 text-white/60 text-sm">No sales yet.</div>
+                                <div className="p-4 text-white/60 text-sm">No sales in this period.</div>
                             ) : (
                                 recentSales.map((sale) => (
                                     <div key={sale.id} className="p-4 hover:bg-white/5 transition">

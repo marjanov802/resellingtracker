@@ -1,4 +1,3 @@
-// FILE: app/program/sales/page.js
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
@@ -260,7 +259,10 @@ function IconButton({ title, onClick, className = "", children }) {
             title={title}
             aria-label={title}
             onClick={onClick}
-            className={["inline-flex h-8 w-8 items-center justify-center rounded-2xl border border-white/10 bg-white/10 text-white/90 transition hover:bg-white/15", className].join(" ")}
+            className={[
+                "inline-flex h-8 w-8 items-center justify-center rounded-2xl border border-white/10 bg-white/10 text-white/90 transition hover:bg-white/15",
+                className,
+            ].join(" ")}
         >
             {children}
         </button>
@@ -269,7 +271,15 @@ function IconButton({ title, onClick, className = "", children }) {
 
 function TrashIcon({ className = "" }) {
     return (
-        <svg viewBox="0 0 24 24" className={["h-4 w-4", className].join(" ")} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+            viewBox="0 0 24 24"
+            className={["h-4 w-4", className].join(" ")}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        >
             <path d="M3 6h18" />
             <path d="M8 6V4h8v2" />
             <path d="M19 6l-1 14H6L5 6" />
@@ -281,7 +291,15 @@ function TrashIcon({ className = "" }) {
 
 function CheckIcon({ className = "" }) {
     return (
-        <svg viewBox="0 0 24 24" className={["h-4 w-4", className].join(" ")} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+            viewBox="0 0 24 24"
+            className={["h-4 w-4", className].join(" ")}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        >
             <path d="M20 6 9 17l-5-5" />
         </svg>
     )
@@ -351,7 +369,19 @@ export default function SalesPage() {
     })
 
     const [search, setSearch] = useState("")
-    const [period, setPeriod] = useState("week") // day|week|month|year
+    const [period, setPeriod] = useState("week") // day|week|month|year|range
+
+    // reference date for day/week/month/year views (lets you pick which week/month/year)
+    const [anchorDateYmd, setAnchorDateYmd] = useState(() => toDateInput(new Date()))
+
+    // custom date range for totals/label
+    const [customRange, setCustomRange] = useState(() => {
+        const now = new Date()
+        const s = startOfWeekLocal(now)
+        const e = new Date(s)
+        e.setDate(s.getDate() + 6)
+        return { from: toDateInput(s), to: toDateInput(e) }
+    })
 
     const [addOpen, setAddOpen] = useState(false)
     const [addSaving, setAddSaving] = useState(false)
@@ -378,6 +408,13 @@ export default function SalesPage() {
         const now = new Date()
         return { from: toDateInput(now), to: toDateInput(now) }
     })
+
+    const anchorDate = useMemo(() => {
+        const ymd = String(anchorDateYmd || "").trim()
+        if (!ymd) return new Date()
+        const d = new Date(`${ymd}T12:00:00`)
+        return Number.isNaN(d.getTime()) ? new Date() : d
+    }, [anchorDateYmd])
 
     const showToast = (type, msg) => {
         setToast({ type, msg })
@@ -650,30 +687,44 @@ export default function SalesPage() {
     }, [filteredSales])
 
     const periodLabel = useMemo(() => {
-        const now = new Date()
-        if (period === "day") return now.toLocaleDateString()
+        if (period === "range") {
+            const { from, to } = parseDateInputToLocalRange(customRange.from, customRange.to)
+            if (!from && !to) return "—"
+            const f = from ? from.toLocaleDateString() : "—"
+            const t = to ? to.toLocaleDateString() : "—"
+            return `${f} – ${t}`
+        }
+
+        const ref = anchorDate
+        if (period === "day") return ref.toLocaleDateString()
         if (period === "week") {
-            const s = startOfWeekLocal(now)
+            const s = startOfWeekLocal(ref)
             const e = new Date(s)
             e.setDate(s.getDate() + 6)
             return `${s.toLocaleDateString()} – ${e.toLocaleDateString()}`
         }
-        if (period === "month") return `${now.toLocaleString(undefined, { month: "long" })} ${now.getFullYear()}`
-        return String(now.getFullYear())
-    }, [period])
+        if (period === "month") return `${ref.toLocaleString(undefined, { month: "long" })} ${ref.getFullYear()}`
+        return String(ref.getFullYear())
+    }, [period, anchorDate, customRange.from, customRange.to])
 
     const periodTotals = useMemo(() => {
-        const now = new Date()
-
         let revenue = 0
         let profit = 0
         let units = 0
         let rows = 0
 
+        const range = period === "range" ? parseDateInputToLocalRange(customRange.from, customRange.to) : { from: null, to: null }
+
         for (const s of filteredSales) {
             const soldAt = s.soldAt ? new Date(s.soldAt) : null
             if (!soldAt || Number.isNaN(soldAt.getTime())) continue
-            if (!isSameBucket(soldAt, now, period)) continue
+
+            if (period === "range") {
+                if (range.from && soldAt.getTime() < range.from.getTime()) continue
+                if (range.to && soldAt.getTime() > range.to.getTime()) continue
+            } else {
+                if (!isSameBucket(soldAt, anchorDate, period)) continue
+            }
 
             const cur = (s.currency || "GBP").toUpperCase()
             const qty = Number(s.quantitySold || 0) || 0
@@ -694,10 +745,13 @@ export default function SalesPage() {
         const margin = revenue > 0 ? (profit / revenue) * 100 : 0
 
         return { revenue, profit, units, rows, avgSale, margin }
-    }, [filteredSales, period, currencyView, fx.rates])
+    }, [filteredSales, period, anchorDate, customRange.from, customRange.to, currencyView, fx.rates])
 
     const allVisibleIds = useMemo(() => filteredSales.map((s) => String(s.id)).filter(Boolean), [filteredSales])
-    const allVisibleSelected = useMemo(() => allVisibleIds.length > 0 && allVisibleIds.every((id) => selectedIds.has(id)), [allVisibleIds, selectedIds])
+    const allVisibleSelected = useMemo(
+        () => allVisibleIds.length > 0 && allVisibleIds.every((id) => selectedIds.has(id)),
+        [allVisibleIds, selectedIds]
+    )
     const selectedCount = selectedIds.size
 
     const toggleSelectAllVisible = () => {
@@ -787,13 +841,19 @@ export default function SalesPage() {
                 <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
                     <div>
                         <h1 className="text-3xl font-semibold tracking-tight">Sales</h1>
-                        <p className="mt-1 text-sm text-zinc-300">Record a sale, and it will remove units from inventory (decrement or delete) and set status to SOLD when quantity hits 0.</p>
+                        <p className="mt-1 text-sm text-zinc-300">
+                            Record a sale, and it will remove units from inventory (decrement or delete) and set status to SOLD when quantity hits 0.
+                        </p>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
                         <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
                             <div className="text-xs font-semibold text-zinc-300">Display</div>
-                            <select value={currencyView} onChange={(e) => setCurrencyView(e.target.value)} className="h-9 rounded-xl border border-white/10 bg-zinc-950/60 px-2 text-sm text-white outline-none">
+                            <select
+                                value={currencyView}
+                                onChange={(e) => setCurrencyView(e.target.value)}
+                                className="h-9 rounded-xl border border-white/10 bg-zinc-950/60 px-2 text-sm text-white outline-none"
+                            >
                                 {Object.keys(CURRENCY_META).map((c) => (
                                     <option key={c} value={c}>
                                         {c}
@@ -819,7 +879,11 @@ export default function SalesPage() {
                                 placeholder="Search item, SKU, platform, notes…"
                             />
                             {search ? (
-                                <button type="button" onClick={() => setSearch("")} className="h-9 rounded-xl border border-white/10 bg-white/10 px-3 text-xs font-semibold text-white/90 hover:bg-white/15">
+                                <button
+                                    type="button"
+                                    onClick={() => setSearch("")}
+                                    className="h-9 rounded-xl border border-white/10 bg-white/10 px-3 text-xs font-semibold text-white/90 hover:bg-white/15"
+                                >
                                     Clear
                                 </button>
                             ) : null}
@@ -857,27 +921,66 @@ export default function SalesPage() {
 
                 {toast.msg ? (
                     <div className="mb-5">
-                        <div className={["rounded-2xl border px-4 py-3 text-sm", toast.type === "error" ? "border-red-400/20 bg-red-500/10 text-red-100" : "border-emerald-400/20 bg-emerald-500/10 text-emerald-100"].join(" ")}>
+                        <div
+                            className={[
+                                "rounded-2xl border px-4 py-3 text-sm",
+                                toast.type === "error" ? "border-red-400/20 bg-red-500/10 text-red-100" : "border-emerald-400/20 bg-emerald-500/10 text-emerald-100",
+                            ].join(" ")}
+                        >
                             {toast.msg}
                         </div>
                     </div>
                 ) : null}
 
                 <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-white/10 bg-white/5 p-4 shadow-lg backdrop-blur">
-                    <div className="flex items-center gap-2">
-                        <div className="text-xs font-semibold text-zinc-300">Period</div>
-                        <div className="inline-flex rounded-2xl border border-white/10 bg-zinc-950/30 p-1">
-                            {["day", "week", "month", "year"].map((p) => (
-                                <button
-                                    key={p}
-                                    type="button"
-                                    onClick={() => setPeriod(p)}
-                                    className={["h-10 rounded-2xl px-4 text-sm font-semibold transition", period === p ? "bg-white text-zinc-950" : "text-white/90 hover:bg-white/10"].join(" ")}
-                                >
-                                    {p[0].toUpperCase() + p.slice(1)}
-                                </button>
-                            ))}
+                    <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex items-center gap-2">
+                            <div className="text-xs font-semibold text-zinc-300">Period</div>
+                            <div className="inline-flex rounded-2xl border border-white/10 bg-zinc-950/30 p-1">
+                                {["day", "week", "month", "year", "range"].map((p) => (
+                                    <button
+                                        key={p}
+                                        type="button"
+                                        onClick={() => setPeriod(p)}
+                                        className={[
+                                            "h-10 rounded-2xl px-4 text-sm font-semibold transition",
+                                            period === p ? "bg-white text-zinc-950" : "text-white/90 hover:bg-white/10",
+                                        ].join(" ")}
+                                    >
+                                        {p === "range" ? "Custom" : p[0].toUpperCase() + p.slice(1)}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
+
+                        {period === "range" ? (
+                            <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-zinc-950/30 px-3 py-2">
+                                <div className="text-xs font-semibold text-zinc-300">From</div>
+                                <input
+                                    type="date"
+                                    value={customRange.from}
+                                    onChange={(e) => setCustomRange((p) => ({ ...p, from: e.target.value }))}
+                                    className="h-9 rounded-xl border border-white/10 bg-zinc-950/60 px-2 text-sm text-white outline-none"
+                                />
+                                <div className="text-xs font-semibold text-zinc-300">To</div>
+                                <input
+                                    type="date"
+                                    value={customRange.to}
+                                    onChange={(e) => setCustomRange((p) => ({ ...p, to: e.target.value }))}
+                                    className="h-9 rounded-xl border border-white/10 bg-zinc-950/60 px-2 text-sm text-white outline-none"
+                                />
+                            </div>
+                        ) : (
+                            <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-zinc-950/30 px-3 py-2">
+                                <div className="text-xs font-semibold text-zinc-300">{period === "week" ? "Week of" : "Date"}</div>
+                                <input
+                                    type="date"
+                                    value={anchorDateYmd}
+                                    onChange={(e) => setAnchorDateYmd(e.target.value)}
+                                    className="h-9 rounded-xl border border-white/10 bg-zinc-950/60 px-2 text-sm text-white outline-none"
+                                />
+                            </div>
+                        )}
                     </div>
 
                     <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-300">
@@ -935,12 +1038,18 @@ export default function SalesPage() {
                     </div>
 
                     <div className="rounded-2xl border border-white/10 overflow-hidden">
-                        <div className={["grid border-b border-white/10", HEAD_H, HEADER_BG].join(" ")} style={{ gridTemplateColumns: "54px minmax(0,2fr) 120px 110px 150px 150px 150px 110px 60px" }}>
+                        <div
+                            className={["grid border-b border-white/10", HEAD_H, HEADER_BG].join(" ")}
+                            style={{ gridTemplateColumns: "54px minmax(0,2fr) 120px 110px 150px 150px 150px 110px 60px" }}
+                        >
                             <div className={["flex items-center justify-center text-xs font-semibold text-zinc-200"].join(" ")}>
                                 <button
                                     type="button"
                                     onClick={toggleSelectAllVisible}
-                                    className={["inline-flex h-7 w-7 items-center justify-center rounded-xl border transition", allVisibleSelected ? "border-white/10 bg-white text-zinc-950" : "border-white/10 bg-white/10 text-white/90 hover:bg-white/15"].join(" ")}
+                                    className={[
+                                        "inline-flex h-7 w-7 items-center justify-center rounded-xl border transition",
+                                        allVisibleSelected ? "border-white/10 bg-white text-zinc-950" : "border-white/10 bg-white/10 text-white/90 hover:bg-white/15",
+                                    ].join(" ")}
                                     title={allVisibleSelected ? "Unselect visible" : "Select visible"}
                                 >
                                     {allVisibleSelected ? <CheckIcon /> : null}
@@ -1025,7 +1134,9 @@ export default function SalesPage() {
                                         </div>
 
                                         <div className={["flex min-w-0 items-center overflow-hidden", CELL_PAD, CELL_Y].join(" ")}>
-                                            <span className={["truncate text-[13px] font-semibold", profitPence >= 0 ? "text-emerald-200" : "text-red-200"].join(" ")}>{profitView}</span>
+                                            <span className={["truncate text-[13px] font-semibold", profitPence >= 0 ? "text-emerald-200" : "text-red-200"].join(" ")}>
+                                                {profitView}
+                                            </span>
                                         </div>
 
                                         <div className={["flex min-w-0 items-center overflow-hidden", CELL_PAD, CELL_Y].join(" ")}>
@@ -1135,7 +1246,9 @@ export default function SalesPage() {
 
                         <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                             <div className="text-sm font-semibold text-white">Delete within date range</div>
-                            <div className="mt-1 text-xs text-zinc-300">Deletes all sales whose Sold at falls between these dates (inclusive), using the current filtered list.</div>
+                            <div className="mt-1 text-xs text-zinc-300">
+                                Deletes all sales whose Sold at falls between these dates (inclusive), using the current filtered list.
+                            </div>
 
                             <div className="mt-3 grid gap-3 sm:grid-cols-2">
                                 <Field label="From">
@@ -1180,10 +1293,19 @@ export default function SalesPage() {
                     maxWidth="max-w-4xl"
                     footer={
                         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                            <button type="button" onClick={() => setAddOpen(false)} className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10">
+                            <button
+                                type="button"
+                                onClick={() => setAddOpen(false)}
+                                className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
+                            >
                                 Cancel
                             </button>
-                            <button type="submit" form="rt-sale-form" disabled={addSaving} className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100 disabled:opacity-60">
+                            <button
+                                type="submit"
+                                form="rt-sale-form"
+                                disabled={addSaving}
+                                className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100 disabled:opacity-60"
+                            >
                                 {addSaving ? "Saving…" : "Save sale"}
                             </button>
                         </div>
@@ -1260,7 +1382,8 @@ export default function SalesPage() {
                                     <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
                                         <div className="text-[11px] font-semibold text-zinc-300">Cost basis</div>
                                         <div className="mt-1 text-sm font-semibold text-white">
-                                            {fmt(selectedItemComputed?.itemCur || "GBP", purchaseTotalForSoldUnitsPence)} ({sellQty} × {fmt(selectedItemComputed?.itemCur || "GBP", purchasePerUnitPence)})
+                                            {fmt(selectedItemComputed?.itemCur || "GBP", purchaseTotalForSoldUnitsPence)} ({sellQty} ×{" "}
+                                            {fmt(selectedItemComputed?.itemCur || "GBP", purchasePerUnitPence)})
                                         </div>
                                     </div>
 
@@ -1296,7 +1419,10 @@ export default function SalesPage() {
                                         <button
                                             type="button"
                                             onClick={() => setSellForm((p) => ({ ...p, removeMode: "DECREMENT" }))}
-                                            className={["h-11 rounded-2xl border px-4 text-sm font-semibold transition", sellForm.removeMode === "DECREMENT" ? "border-white/10 bg-white text-zinc-950" : "border-white/10 bg-white/5 text-white/90 hover:bg-white/10"].join(" ")}
+                                            className={[
+                                                "h-11 rounded-2xl border px-4 text-sm font-semibold transition",
+                                                sellForm.removeMode === "DECREMENT" ? "border-white/10 bg-white text-zinc-950" : "border-white/10 bg-white/5 text-white/90 hover:bg-white/10",
+                                            ].join(" ")}
                                         >
                                             Decrement quantity
                                         </button>
@@ -1304,7 +1430,10 @@ export default function SalesPage() {
                                         <button
                                             type="button"
                                             onClick={() => setSellForm((p) => ({ ...p, removeMode: "DELETE" }))}
-                                            className={["h-11 rounded-2xl border px-4 text-sm font-semibold transition", sellForm.removeMode === "DELETE" ? "border-red-400/20 bg-red-500/10 text-red-100" : "border-white/10 bg-white/5 text-white/90 hover:bg-white/10"].join(" ")}
+                                            className={[
+                                                "h-11 rounded-2xl border px-4 text-sm font-semibold transition",
+                                                sellForm.removeMode === "DELETE" ? "border-red-400/20 bg-red-500/10 text-red-100" : "border-white/10 bg-white/5 text-white/90 hover:bg-white/10",
+                                            ].join(" ")}
                                         >
                                             Delete item row
                                         </button>
@@ -1368,7 +1497,11 @@ export default function SalesPage() {
                     maxWidth="max-w-4xl"
                     footer={
                         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-                            <button type="button" onClick={() => deleteSale(selectedSale.id)} className="h-11 rounded-2xl border border-red-400/20 bg-red-500/10 px-5 text-sm font-semibold text-red-100 hover:bg-red-500/15">
+                            <button
+                                type="button"
+                                onClick={() => deleteSale(selectedSale.id)}
+                                className="h-11 rounded-2xl border border-red-400/20 bg-red-500/10 px-5 text-sm font-semibold text-red-100 hover:bg-red-500/15"
+                            >
                                 Delete sale
                             </button>
 
