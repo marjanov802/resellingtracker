@@ -17,7 +17,6 @@ const CURRENCY_META = {
 const STATUSES = [
     ["UNLISTED", "Unlisted"],
     ["LISTED", "Listed"],
-    ["SOLD", "Sold"],
 ]
 
 const PLATFORMS = [
@@ -198,11 +197,9 @@ function compute(it) {
 function Pill({ text }) {
     const t = String(text || "").toUpperCase()
     const cls =
-        t === "SOLD"
-            ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-100"
-            : t === "LISTED"
-                ? "border-blue-400/20 bg-blue-500/10 text-blue-100"
-                : "border-white/10 bg-white/5 text-zinc-200"
+        t === "LISTED"
+            ? "border-blue-400/20 bg-blue-500/10 text-blue-100"
+            : "border-white/10 bg-white/5 text-zinc-200"
 
     return <span className={["inline-flex items-center rounded-2xl border px-2.5 py-1 text-[11px] font-semibold", cls].join(" ")}>{t}</span>
 }
@@ -342,6 +339,15 @@ function CheckIcon({ className = "" }) {
     return (
         <svg viewBox="0 0 24 24" className={["h-4 w-4", className].join(" ")} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M20 6 9 17l-5-5" />
+        </svg>
+    )
+}
+
+function DollarIcon({ className = "" }) {
+    return (
+        <svg viewBox="0 0 24 24" className={["h-4 w-4", className].join(" ")} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="12" y1="1" x2="12" y2="23" />
+            <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
         </svg>
     )
 }
@@ -579,6 +585,14 @@ export default function InventoryPage() {
         notes: "",
     }))
 
+    // ============================================
+    // BULK MARK AS SOLD STATE
+    // ============================================
+    const [bulkSellOpen, setBulkSellOpen] = useState(false)
+    const [bulkSellSaving, setBulkSellSaving] = useState(false)
+    const [bulkSellItems, setBulkSellItems] = useState([])
+    // Each item in bulkSellItems: { item, quantitySold, salePricePerUnit, platform, notes }
+
     const showToast = (type, msg) => {
         setToast({ type, msg })
         window.clearTimeout(showToast._t)
@@ -703,6 +717,197 @@ export default function InventoryPage() {
         }
     }
 
+    // ============================================
+    // BULK MARK AS SOLD FUNCTIONS
+    // ============================================
+    const openBulkSell = () => {
+        const ids = Array.from(selected)
+        if (ids.length === 0) return showToast("error", "No items selected")
+
+        // Filter to only items with quantity > 0
+        const sellableItems = items.filter((it) => {
+            if (!ids.includes(it.id)) return false
+            const qty = Number(it.quantity) || 0
+            return qty > 0
+        })
+
+        if (sellableItems.length === 0) {
+            return showToast("error", "No sellable items selected (all have 0 quantity)")
+        }
+
+        // Initialize bulk sell items with defaults
+        const initialItems = sellableItems.map((it) => {
+            const c = compute(it)
+            const availableQty = Number(it.quantity) || 0
+            // Default sale price to listing price if available, otherwise estimated sale
+            const defaultPrice = c.listingPricePerUnit ?? c.meta.estimatedSalePence ?? 0
+            // Get platform from first listing if available
+            const firstListing = c.meta.listings?.[0]
+            const defaultPlatform = firstListing?.platform || "EBAY"
+
+            return {
+                item: it,
+                computed: c,
+                availableQty,
+                quantitySold: availableQty, // Default to selling all
+                salePricePerUnit: (defaultPrice / 100).toFixed(2),
+                platform: defaultPlatform,
+                notes: "",
+            }
+        })
+
+        setBulkSellItems(initialItems)
+        setBulkSellOpen(true)
+    }
+
+    const updateBulkSellItem = (index, patch) => {
+        setBulkSellItems((prev) => {
+            const next = [...prev]
+            next[index] = { ...next[index], ...patch }
+            return next
+        })
+    }
+
+    const removeBulkSellItem = (index) => {
+        setBulkSellItems((prev) => prev.filter((_, i) => i !== index))
+    }
+
+    const submitBulkSell = async () => {
+        // Validate all items
+        for (let i = 0; i < bulkSellItems.length; i++) {
+            const entry = bulkSellItems[i]
+            const qty = safeInt(entry.quantitySold, 0)
+            const price = parseMoneyToPence(entry.salePricePerUnit)
+
+            if (qty <= 0) {
+                return showToast("error", `${entry.item.name}: Quantity must be at least 1`)
+            }
+            if (qty > entry.availableQty) {
+                return showToast("error", `${entry.item.name}: Quantity exceeds available (${entry.availableQty})`)
+            }
+            if (price <= 0) {
+                return showToast("error", `${entry.item.name}: Sale price is required`)
+            }
+        }
+
+        setBulkSellSaving(true)
+        let successCount = 0
+        let failCount = 0
+
+        try {
+            for (const entry of bulkSellItems) {
+                const it = entry.item
+                const c = entry.computed
+                const sellQty = safeInt(entry.quantitySold, 0)
+                const sellPricePerUnitPence = parseMoneyToPence(entry.salePricePerUnit)
+                const platform = (entry.platform || "OTHER").toUpperCase()
+                const saleCur = (c.itemCur || "GBP").toUpperCase()
+
+                const purchasePerUnitPence = c.purchaseTotalPerUnit || 0
+                const purchaseTotalForSoldUnitsPence = sellQty * purchasePerUnitPence
+                const sellGrossPence = sellQty * sellPricePerUnitPence
+
+                // 1. Create sale record
+                const salePayload = {
+                    itemId: String(it.id),
+                    itemName: it.name || null,
+                    sku: it.sku || null,
+                    platform,
+                    soldAt: new Date().toISOString(),
+                    quantitySold: sellQty,
+                    salePricePerUnitPence: sellPricePerUnitPence,
+                    feesPence: 0,
+                    netPence: sellGrossPence,
+                    costTotalPence: purchaseTotalForSoldUnitsPence,
+                    currency: saleCur,
+                    notes: String(entry.notes || "").trim() || null,
+                }
+
+                try {
+                    const resSale = await fetch("/api/sales", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(salePayload),
+                    })
+                    const saleData = await resSale.json().catch(() => null)
+                    if (!resSale.ok) throw new Error(saleData?.error || `Create sale failed`)
+
+                    // 2. Update inventory - delete if 0, otherwise decrement
+                    const available = Number(it.quantity) || 0
+                    const remaining = Math.max(0, available - sellQty)
+
+                    if (remaining === 0) {
+                        // Delete the item entirely from inventory
+                        const resDel = await fetch(`/api/items/${it.id}`, { method: "DELETE" })
+                        const delData = await resDel.json().catch(() => null)
+                        if (!resDel.ok) throw new Error(delData?.error || `Inventory delete failed`)
+                    } else {
+                        // Decrement quantity, keep status as is
+                        const decoded = decodeNotes(it.notes)
+                        const meta = normaliseMeta(decoded.meta)
+
+                        const patched = {
+                            quantity: remaining,
+                            notes: encodeNotes(decoded.notes, meta),
+                        }
+
+                        const resPatch = await fetch(`/api/items/${it.id}`, {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(patched),
+                        })
+                        const patchData = await resPatch.json().catch(() => null)
+                        if (!resPatch.ok) throw new Error(patchData?.error || `Inventory update failed`)
+                    }
+
+                    successCount++
+                } catch (err) {
+                    console.error(`Failed to process sale for ${it.name}:`, err)
+                    failCount++
+                }
+            }
+
+            if (failCount === 0) {
+                showToast("ok", `${successCount} sale(s) recorded successfully`)
+            } else {
+                showToast("error", `${successCount} succeeded, ${failCount} failed`)
+            }
+
+            setBulkSellOpen(false)
+            setBulkSellItems([])
+            clearSelection()
+            await loadItems()
+        } catch (e) {
+            showToast("error", e?.message || "Bulk sell failed")
+        } finally {
+            setBulkSellSaving(false)
+        }
+    }
+
+    // Calculate totals for bulk sell modal
+    const bulkSellTotals = useMemo(() => {
+        let totalRevenue = 0
+        let totalCost = 0
+        let totalUnits = 0
+
+        for (const entry of bulkSellItems) {
+            const qty = safeInt(entry.quantitySold, 0)
+            const price = parseMoneyToPence(entry.salePricePerUnit)
+            const cost = (entry.computed?.purchaseTotalPerUnit || 0) * qty
+
+            totalRevenue += qty * price
+            totalCost += cost
+            totalUnits += qty
+        }
+
+        return {
+            revenue: totalRevenue,
+            cost: totalCost,
+            profit: totalRevenue - totalCost,
+            units: totalUnits,
+        }
+    }, [bulkSellItems])
+
     const openAdd = () => {
         setAddForm({
             title: "",
@@ -755,14 +960,6 @@ export default function InventoryPage() {
 
     /**
      * ADDITION: URL Import handler
-     *
-     * IMPORTANT: your browser cannot reliably scrape eBay/Vinted pages directly because of CORS.
-     * This expects you to create an API route that fetches the HTML server-side and returns parsed data.
-     *
-     * Endpoint this calls (you create it):
-     *   GET /api/listing-import?url=<encoded>
-     * Response:
-     *   { ok: true, data: { title?: string, pricePence?: number, currency?: string, platform?: string, url?: string } }
      */
     const importFromUrlIntoAdd = async () => {
         const raw = safeStr(importUrl)
@@ -785,7 +982,6 @@ export default function InventoryPage() {
             const pricePence = Number(d.pricePence)
             const hasPrice = Number.isFinite(pricePence) && pricePence > 0
 
-            // Fill what we can, keep all existing fields untouched unless we have a better value.
             setAddForm((p) => ({
                 ...p,
                 title: title || p.title,
@@ -1243,7 +1439,7 @@ export default function InventoryPage() {
                 <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
                     <div>
                         <h1 className="text-3xl font-semibold tracking-tight">Inventory</h1>
-                        <p className="mt-1 text-sm text-zinc-300">Estimated sale is used for Unlisted. Listing price is used for Listed and Sold. Both show in the same Sale price column.</p>
+                        <p className="mt-1 text-sm text-zinc-300">Estimated sale is used for Unlisted. Listing price is used for Listed. Items are removed from inventory when sold.</p>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
@@ -1319,6 +1515,19 @@ export default function InventoryPage() {
                         <div className="flex flex-wrap items-center gap-2">
                             <button type="button" onClick={toggleSelectAllVisible} className="h-10 rounded-2xl border border-white/10 bg-transparent px-4 text-sm font-semibold text-white/90 transition hover:bg-white/5">
                                 {allVisibleSelected ? "Clear visible" : "Select visible"}
+                            </button>
+
+                            {/* MARK AS SOLD BUTTON */}
+                            <button
+                                type="button"
+                                onClick={openBulkSell}
+                                disabled={selected.size === 0}
+                                className="h-10 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                <span className="flex items-center gap-2">
+                                    <DollarIcon />
+                                    Mark as sold ({selected.size})
+                                </span>
                             </button>
 
                             <button
@@ -1505,13 +1714,13 @@ export default function InventoryPage() {
             {/* COLUMNS MODAL */}
             {columnsOpen ? (
                 <Modal
-                    title="Customise columns"
+                    title="Columns"
                     onClose={() => setColumnsOpen(false)}
                     maxWidth="max-w-2xl"
                     footer={
                         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-                            <button type="button" onClick={() => setColumns(DEFAULT_COLUMNS)} className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10">
-                                Reset to default
+                            <button type="button" onClick={() => setColumns(clampColumnsToMax(DEFAULT_COLUMNS, MAX_VISIBLE_COLUMNS))} className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10">
+                                Reset
                             </button>
                             <button type="button" onClick={() => setColumnsOpen(false)} className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100">
                                 Done
@@ -1519,54 +1728,34 @@ export default function InventoryPage() {
                         </div>
                     }
                 >
-                    <div className="mb-3 text-xs text-zinc-300">
-                        Max visible columns: <span className="font-semibold text-white">{MAX_VISIBLE_COLUMNS}</span> (to avoid horizontal scrolling)
-                    </div>
+                    <div className="grid gap-3">
+                        <div className="mb-2 text-xs text-zinc-300">
+                            Toggle up to {MAX_VISIBLE_COLUMNS} columns. Currently showing <span className="font-semibold text-white">{enabledColumnsCount}</span> of {COLUMN_DEFS.length}.
+                        </div>
 
-                    <div className="grid gap-3 sm:grid-cols-2">
-                        {COLUMN_DEFS.map((d) => {
-                            const checked = !!columns[d.key]
-                            const maxed = enabledColumnsCount >= MAX_VISIBLE_COLUMNS
-                            const disableEnable = !checked && maxed
+                        {COLUMN_DEFS.map((def) => {
+                            const active = !!columns[def.key]
+                            const disabledBecauseFull = !active && enabledColumnsCount >= MAX_VISIBLE_COLUMNS
 
                             return (
                                 <div
-                                    key={d.key}
-                                    className={[
-                                        "flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 hover:bg-white/10",
-                                        disableEnable ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
-                                    ].join(" ")}
+                                    key={def.key}
+                                    role="button"
+                                    tabIndex={disabledBecauseFull ? -1 : 0}
+                                    className={["flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-white/10 px-4 py-3", disabledBecauseFull ? "opacity-50 cursor-not-allowed bg-white/[0.02]" : "bg-white/5 hover:bg-white/10"].join(" ")}
                                     onClick={() => {
-                                        if (disableEnable) return showToast("error", `Max ${MAX_VISIBLE_COLUMNS} columns`)
-                                        setColumns((p) => {
-                                            const currentlyOn = !!p[d.key]
-                                            if (!currentlyOn && enabledColumnsCount >= MAX_VISIBLE_COLUMNS) {
-                                                showToast("error", `Max ${MAX_VISIBLE_COLUMNS} columns`)
-                                                return p
-                                            }
-                                            const next = { ...p, [d.key]: !currentlyOn }
-                                            return clampColumnsToMax(next, MAX_VISIBLE_COLUMNS)
-                                        })
+                                        if (disabledBecauseFull) return
+                                        setColumns((prev) => clampColumnsToMax({ ...prev, [def.key]: !active }, MAX_VISIBLE_COLUMNS))
+                                    }}
+                                    onKeyDown={(e) => {
+                                        if (disabledBecauseFull) return
+                                        if (e.key === "Enter" || e.key === " ") {
+                                            setColumns((prev) => clampColumnsToMax({ ...prev, [def.key]: !active }, MAX_VISIBLE_COLUMNS))
+                                        }
                                     }}
                                 >
-                                    <div className="text-sm font-semibold text-white">{d.label}</div>
-                                    <TickButton
-                                        checked={checked}
-                                        disabled={disableEnable}
-                                        title={checked ? "Disable" : "Enable"}
-                                        onToggle={() => {
-                                            if (disableEnable) return showToast("error", `Max ${MAX_VISIBLE_COLUMNS} columns`)
-                                            setColumns((p) => {
-                                                const currentlyOn = !!p[d.key]
-                                                if (!currentlyOn && enabledColumnsCount >= MAX_VISIBLE_COLUMNS) {
-                                                    showToast("error", `Max ${MAX_VISIBLE_COLUMNS} columns`)
-                                                    return p
-                                                }
-                                                const next = { ...p, [d.key]: !currentlyOn }
-                                                return clampColumnsToMax(next, MAX_VISIBLE_COLUMNS)
-                                            })
-                                        }}
-                                    />
+                                    <div className="text-sm font-semibold text-white">{def.label}</div>
+                                    <TickButton checked={active} onToggle={() => setColumns((prev) => clampColumnsToMax({ ...prev, [def.key]: !active }, MAX_VISIBLE_COLUMNS))} title={active ? "Hide" : "Show"} disabled={disabledBecauseFull} />
                                 </div>
                             )
                         })}
@@ -1574,7 +1763,7 @@ export default function InventoryPage() {
                 </Modal>
             ) : null}
 
-            {/* ADD MODAL */}
+            {/* ADD ITEM MODAL */}
             {addOpen ? (
                 <Modal
                     title="Add item"
@@ -1585,53 +1774,40 @@ export default function InventoryPage() {
                             <button type="button" onClick={() => setAddOpen(false)} className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10">
                                 Cancel
                             </button>
-                            <button type="submit" form="rt-add-item" disabled={addSaving} className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100 disabled:opacity-60">
-                                {addSaving ? "Saving…" : "Create"}
+                            <button type="submit" form="rt-add-form" disabled={addSaving} className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100 disabled:opacity-60">
+                                {addSaving ? "Saving…" : "Save"}
                             </button>
                         </div>
                     }
                 >
-                    <form id="rt-add-item" onSubmit={submitAdd} className="space-y-4">
-                        <div className="grid gap-4 md:grid-cols-2">
-                            {/* ADDITION: Import from URL (does not remove anything) */}
-                            <div className="md:col-span-2 rounded-2xl border border-white/10 bg-zinc-950/30 p-4">
-                                <div className="text-xs font-semibold text-zinc-300">Import from listing URL</div>
-                                <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
-                                    <input
-                                        value={importUrl}
-                                        onChange={(e) => setImportUrl(e.target.value)}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                        placeholder="Paste eBay / Vinted / Depop URL…"
-                                    />
-                                    <button
-                                        type="button"
-                                        disabled={importing}
-                                        onClick={importFromUrlIntoAdd}
-                                        className="h-11 shrink-0 rounded-2xl border border-white/10 bg-white/10 px-5 text-sm font-semibold text-white hover:bg-white/15 disabled:opacity-60"
-                                    >
-                                        {importing ? "Importing…" : "Import"}
-                                    </button>
-                                </div>
-                                <div className="mt-2 text-[11px] text-zinc-400">
-                                    This fills what it can (title, listing link, and price if available) and sets the item to <span className="font-semibold text-zinc-200">Listed</span>.
-                                </div>
-                            </div>
-
-                            <Field label="Title *" className="md:col-span-2">
+                    <form id="rt-add-form" onSubmit={submitAdd} className="space-y-4">
+                        {/* Import URL section */}
+                        <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                            <div className="text-sm font-semibold text-white">Import from listing URL (optional)</div>
+                            <div className="mt-1 text-xs text-zinc-300">Paste an eBay, Vinted, etc. URL and click Import. Requires /api/listing-import endpoint.</div>
+                            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                                 <input
-                                    value={addForm.title}
-                                    onChange={(e) => onAddChange({ title: e.target.value })}
-                                    className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                    placeholder="e.g. Nike Air Max 95"
-                                    autoFocus
+                                    value={importUrl}
+                                    onChange={(e) => setImportUrl(e.target.value)}
+                                    className="h-11 flex-1 rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    placeholder="https://ebay.co.uk/itm/…"
                                 />
+                                <button type="button" onClick={importFromUrlIntoAdd} disabled={importing} className="h-11 rounded-2xl border border-white/10 bg-white/10 px-5 text-sm font-semibold text-white hover:bg-white/15 disabled:opacity-60">
+                                    {importing ? "Importing…" : "Import"}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-2">
+                            <Field label="Title *" className="md:col-span-2">
+                                <input value={addForm.title} onChange={(e) => onAddChange({ title: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="Item name…" />
                             </Field>
 
-                            <Field label="SKU *">
-                                <input value={addForm.sku} onChange={(e) => onAddChange({ sku: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="e.g. AM95-001" />
+                            <Field label="SKU">
+                                <input value={addForm.sku} onChange={(e) => onAddChange({ sku: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="Optional…" />
                             </Field>
 
-                            <Field label="Quantity (units)">
+                            <Field label="Quantity">
                                 <input type="number" min={0} value={addForm.quantity} onChange={(e) => onAddChange({ quantity: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" />
                             </Field>
 
@@ -1655,33 +1831,31 @@ export default function InventoryPage() {
                                 </select>
                             </Field>
 
-                            <div className="md:col-span-2">
-                                <div className="mb-1.5 text-xs font-semibold text-zinc-300">Status</div>
-                                <div className="inline-flex rounded-2xl border border-white/10 bg-white/5 p-1">
-                                    <button type="button" onClick={() => onAddChange({ status: "UNLISTED" })} className={["h-10 rounded-2xl px-4 text-sm font-semibold transition", addForm.status === "UNLISTED" ? "bg-white text-zinc-950" : "text-white/90 hover:bg-white/10"].join(" ")}>
-                                        Unlisted
-                                    </button>
-                                    <button type="button" onClick={() => onAddChange({ status: "LISTED" })} className={["h-10 rounded-2xl px-4 text-sm font-semibold transition", addForm.status === "LISTED" ? "bg-white text-zinc-950" : "text-white/90 hover:bg-white/10"].join(" ")}>
-                                        Listed
-                                    </button>
-                                </div>
-                            </div>
-
-                            <Field label="Total purchase price (all-in) per unit">
+                            <Field label={`Purchase total / unit (${currencyView})`}>
                                 <input inputMode="decimal" value={addForm.purchaseTotal} onChange={(e) => onAddChange({ purchaseTotal: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="0.00" />
                             </Field>
 
+                            <Field label="Status">
+                                <select value={addForm.status} onChange={(e) => onAddChange({ status: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
+                                    {STATUSES.map(([v, l]) => (
+                                        <option key={v} value={v}>
+                                            {l}
+                                        </option>
+                                    ))}
+                                </select>
+                            </Field>
+
                             {!addIsListed ? (
-                                <Field label="Estimated sale price per unit">
+                                <Field label={`Estimated sale / unit (${currencyView})`}>
                                     <input inputMode="decimal" value={addForm.estimatedSale} onChange={(e) => onAddChange({ estimatedSale: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="0.00" />
                                 </Field>
                             ) : (
                                 <>
-                                    <Field label="Listing price per unit">
+                                    <Field label={`Listing price / unit (${currencyView})`}>
                                         <input inputMode="decimal" value={addForm.listingPrice} onChange={(e) => onAddChange({ listingPrice: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="0.00" />
                                     </Field>
 
-                                    <Field label="Listing platform">
+                                    <Field label="Platform">
                                         <select value={addForm.listingPlatform} onChange={(e) => onAddChange({ listingPlatform: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
                                             {PLATFORMS.filter(([v]) => v !== "NONE").map(([v, l]) => (
                                                 <option key={v} value={v}>
@@ -1746,8 +1920,8 @@ export default function InventoryPage() {
                 </Modal>
             ) : null}
 
-            {/* EDIT MODAL */}
-            {editOpen ? (
+            {/* EDIT ITEM MODAL */}
+            {editOpen && editItem ? (
                 <Modal
                     title="Edit item"
                     onClose={() => {
@@ -1756,34 +1930,40 @@ export default function InventoryPage() {
                     }}
                     maxWidth="max-w-4xl"
                     footer={
-                        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setEditOpen(false)
-                                    setEditItem(null)
-                                }}
-                                className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
-                            >
-                                Cancel
+                        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+                            <button type="button" onClick={() => singleDelete(editItem.id)} className="h-11 rounded-2xl border border-red-400/20 bg-red-500/10 px-5 text-sm font-semibold text-red-100 hover:bg-red-500/15">
+                                Delete
                             </button>
-                            <button type="submit" form="rt-edit-item" disabled={editSaving} className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100 disabled:opacity-60">
-                                {editSaving ? "Saving…" : "Save changes"}
-                            </button>
+
+                            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setEditOpen(false)
+                                        setEditItem(null)
+                                    }}
+                                    className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
+                                >
+                                    Cancel
+                                </button>
+                                <button type="submit" form="rt-edit-form" disabled={editSaving} className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100 disabled:opacity-60">
+                                    {editSaving ? "Saving…" : "Save"}
+                                </button>
+                            </div>
                         </div>
                     }
                 >
-                    <form id="rt-edit-item" onSubmit={submitEdit} className="space-y-4">
+                    <form id="rt-edit-form" onSubmit={submitEdit} className="space-y-4">
                         <div className="grid gap-4 md:grid-cols-2">
                             <Field label="Title *" className="md:col-span-2">
-                                <input value={editForm.title} onChange={(e) => onEditChange({ title: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="e.g. Nike Air Max 95" autoFocus />
+                                <input value={editForm.title} onChange={(e) => onEditChange({ title: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="Item name…" />
                             </Field>
 
-                            <Field label="SKU (optional)">
-                                <input value={editForm.sku} onChange={(e) => onEditChange({ sku: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="e.g. AM95-001" />
+                            <Field label="SKU">
+                                <input value={editForm.sku} onChange={(e) => onEditChange({ sku: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="Optional…" />
                             </Field>
 
-                            <Field label="Quantity (units)">
+                            <Field label="Quantity">
                                 <input type="number" min={0} value={editForm.quantity} onChange={(e) => onEditChange({ quantity: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" />
                             </Field>
 
@@ -1807,8 +1987,11 @@ export default function InventoryPage() {
                                 </select>
                             </Field>
 
-                            <div className="md:col-span-2">
-                                <div className="mb-1.5 text-xs font-semibold text-zinc-300">Status</div>
+                            <Field label={`Purchase total / unit (${currencyView})`}>
+                                <input inputMode="decimal" value={editForm.purchaseTotal} onChange={(e) => onEditChange({ purchaseTotal: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="0.00" />
+                            </Field>
+
+                            <Field label="Status">
                                 <select value={editForm.status} onChange={(e) => onEditChange({ status: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
                                     {STATUSES.map(([v, l]) => (
                                         <option key={v} value={v}>
@@ -1816,23 +1999,19 @@ export default function InventoryPage() {
                                         </option>
                                     ))}
                                 </select>
-                            </div>
-
-                            <Field label="Total purchase price (all-in) per unit">
-                                <input inputMode="decimal" value={editForm.purchaseTotal} onChange={(e) => onEditChange({ purchaseTotal: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="0.00" />
                             </Field>
 
                             {!editIsListed ? (
-                                <Field label="Estimated sale price per unit">
+                                <Field label={`Estimated sale / unit (${currencyView})`}>
                                     <input inputMode="decimal" value={editForm.estimatedSale} onChange={(e) => onEditChange({ estimatedSale: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="0.00" />
                                 </Field>
                             ) : (
                                 <>
-                                    <Field label="Listing price per unit">
+                                    <Field label={`Listing price / unit (${currencyView})`}>
                                         <input inputMode="decimal" value={editForm.listingPrice} onChange={(e) => onEditChange({ listingPrice: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="0.00" />
                                     </Field>
 
-                                    <Field label="Listing platform">
+                                    <Field label="Platform">
                                         <select value={editForm.listingPlatform} onChange={(e) => onEditChange({ listingPlatform: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
                                             {PLATFORMS.filter(([v]) => v !== "NONE").map(([v, l]) => (
                                                 <option key={v} value={v}>
@@ -1919,6 +2098,146 @@ export default function InventoryPage() {
                     }
                 >
                     <DetailPanel item={detailItem} currencyView={currencyView} rates={fx.rates} />
+                </Modal>
+            ) : null}
+
+            {/* BULK MARK AS SOLD MODAL */}
+            {bulkSellOpen ? (
+                <Modal
+                    title="Mark items as sold"
+                    onClose={() => {
+                        setBulkSellOpen(false)
+                        setBulkSellItems([])
+                    }}
+                    maxWidth="max-w-5xl"
+                    footer={
+                        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setBulkSellOpen(false)
+                                    setBulkSellItems([])
+                                }}
+                                className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
+                            >
+                                Cancel
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={submitBulkSell}
+                                disabled={bulkSellSaving || bulkSellItems.length === 0}
+                                className="h-11 rounded-2xl bg-emerald-600 px-5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
+                            >
+                                {bulkSellSaving ? "Processing…" : `Record ${bulkSellItems.length} sale(s)`}
+                            </button>
+                        </div>
+                    }
+                >
+                    <div className="space-y-4">
+                        {/* Summary */}
+                        <div className="rounded-2xl border border-white/10 bg-zinc-950/30 p-4">
+                            <div className="grid gap-2 sm:grid-cols-4">
+                                <Snapshot label="Items" value={bulkSellItems.length} />
+                                <Snapshot label="Total units" value={bulkSellTotals.units} />
+                                <Snapshot label={`Revenue (${currencyView})`} value={fmt(currencyView, bulkSellTotals.revenue)} good />
+                                <Snapshot label={`Profit (${currencyView})`} value={fmt(currencyView, bulkSellTotals.profit)} good={bulkSellTotals.profit >= 0} />
+                            </div>
+                        </div>
+
+                        <div className="text-xs text-zinc-300">
+                            Enter sale details for each item. Quantity will be decremented from inventory, or the item will be removed entirely if quantity reaches 0.
+                        </div>
+
+                        {/* Items list */}
+                        <div className="space-y-3">
+                            {bulkSellItems.map((entry, index) => {
+                                const qty = safeInt(entry.quantitySold, 0)
+                                const price = parseMoneyToPence(entry.salePricePerUnit)
+                                const cost = (entry.computed?.purchaseTotalPerUnit || 0) * qty
+                                const revenue = qty * price
+                                const profit = revenue - cost
+
+                                return (
+                                    <div key={entry.item.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                                        <div className="flex items-start justify-between gap-3 mb-3">
+                                            <div className="min-w-0">
+                                                <div className="text-sm font-semibold text-white truncate">{entry.item.name}</div>
+                                                <div className="text-xs text-zinc-400">
+                                                    SKU: {entry.item.sku || "—"} • Available: {entry.availableQty} • Cost: {fmt(currencyView, entry.computed?.purchaseTotalPerUnit || 0)}/unit
+                                                </div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => removeBulkSellItem(index)}
+                                                className="shrink-0 h-8 w-8 rounded-xl border border-red-400/20 bg-red-500/10 text-red-100 hover:bg-red-500/15 flex items-center justify-center"
+                                                title="Remove from list"
+                                            >
+                                                <TrashIcon />
+                                            </button>
+                                        </div>
+
+                                        <div className="grid gap-3 sm:grid-cols-4">
+                                            <Field label="Quantity sold">
+                                                <input
+                                                    type="number"
+                                                    min={1}
+                                                    max={entry.availableQty}
+                                                    value={entry.quantitySold}
+                                                    onChange={(e) => updateBulkSellItem(index, { quantitySold: e.target.value })}
+                                                    className="h-10 w-full rounded-xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none focus:border-white/20"
+                                                />
+                                            </Field>
+
+                                            <Field label={`Sale price / unit (${currencyView})`}>
+                                                <input
+                                                    inputMode="decimal"
+                                                    value={entry.salePricePerUnit}
+                                                    onChange={(e) => updateBulkSellItem(index, { salePricePerUnit: e.target.value })}
+                                                    className="h-10 w-full rounded-xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none focus:border-white/20"
+                                                    placeholder="0.00"
+                                                />
+                                            </Field>
+
+                                            <Field label="Platform">
+                                                <select
+                                                    value={entry.platform}
+                                                    onChange={(e) => updateBulkSellItem(index, { platform: e.target.value })}
+                                                    className="h-10 w-full rounded-xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none focus:border-white/20"
+                                                >
+                                                    {PLATFORMS.filter(([v]) => v !== "NONE").map(([v, l]) => (
+                                                        <option key={v} value={v}>
+                                                            {l}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </Field>
+
+                                            <Field label="Notes (optional)">
+                                                <input
+                                                    value={entry.notes}
+                                                    onChange={(e) => updateBulkSellItem(index, { notes: e.target.value })}
+                                                    className="h-10 w-full rounded-xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none focus:border-white/20"
+                                                    placeholder="Optional…"
+                                                />
+                                            </Field>
+                                        </div>
+
+                                        <div className="mt-3 flex items-center gap-4 text-xs">
+                                            <span className="text-zinc-400">Revenue: <span className="text-white font-semibold">{fmt(currencyView, revenue)}</span></span>
+                                            <span className="text-zinc-400">Cost: <span className="text-white font-semibold">{fmt(currencyView, cost)}</span></span>
+                                            <span className="text-zinc-400">Profit: <span className={profit >= 0 ? "text-emerald-200 font-semibold" : "text-red-200 font-semibold"}>{fmt(currencyView, profit)}</span></span>
+                                            <span className="text-zinc-400">Remaining: <span className={Math.max(0, entry.availableQty - qty) === 0 ? "text-red-200 font-semibold" : "text-white font-semibold"}>{Math.max(0, entry.availableQty - qty) === 0 ? "Removed" : Math.max(0, entry.availableQty - qty)}</span></span>
+                                        </div>
+                                    </div>
+                                )
+                            })}
+                        </div>
+
+                        {bulkSellItems.length === 0 ? (
+                            <div className="text-center py-8 text-zinc-400">No sellable items selected.</div>
+                        ) : null}
+                    </div>
                 </Modal>
             ) : null}
         </div>

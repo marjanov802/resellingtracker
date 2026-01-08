@@ -318,14 +318,14 @@ function PeriodControls({ period, onPeriodChange, anchorDateYmd, onAnchorDateCha
                         type="date"
                         value={customRange.from}
                         onChange={(e) => onCustomRangeChange((p) => ({ ...p, from: e.target.value }))}
-                        className="h-9 rounded-xl border border-white/10 bg-zinc-950/60 px-2 text-sm text-white outline-none"
+                        className="h-10 rounded-2xl border border-white/10 bg-zinc-950/60 px-3 text-sm font-semibold text-white/90 outline-none focus:border-white/20 focus:ring-2 focus:ring-white/10 [color-scheme:dark]"
                     />
                     <div className="text-xs font-semibold text-zinc-300">To</div>
                     <input
                         type="date"
                         value={customRange.to}
                         onChange={(e) => onCustomRangeChange((p) => ({ ...p, to: e.target.value }))}
-                        className="h-9 rounded-xl border border-white/10 bg-zinc-950/60 px-2 text-sm text-white outline-none"
+                        className="h-10 rounded-2xl border border-white/10 bg-zinc-950/60 px-3 text-sm font-semibold text-white/90 outline-none focus:border-white/20 focus:ring-2 focus:ring-white/10 [color-scheme:dark]"
                     />
                 </div>
             ) : (
@@ -335,7 +335,7 @@ function PeriodControls({ period, onPeriodChange, anchorDateYmd, onAnchorDateCha
                         type="date"
                         value={anchorDateYmd}
                         onChange={(e) => onAnchorDateChange(e.target.value)}
-                        className="h-9 rounded-xl border border-white/10 bg-zinc-950/60 px-2 text-sm text-white outline-none"
+                        className="h-10 rounded-2xl border border-white/10 bg-zinc-950/60 px-3 text-sm font-semibold text-white/90 outline-none focus:border-white/20 focus:ring-2 focus:ring-white/10 [color-scheme:dark]"
                     />
                 </div>
             )}
@@ -1052,7 +1052,7 @@ export default function ProgramDashboard() {
                 if (saleForm.removeMode === "DELETE") {
                     const resDel = await fetch(`/api/items/${it.id}`, { method: "DELETE" })
                     const delData = await resDel.json().catch(() => null)
-                    if (!resDel.ok) throw new Error(delData?.error || `Inventory delete failed (${resDel.status})`)
+                    if (!resDel.ok) throw new Error(delData?.error || `Inventory delete failed (${delData.status})`)
                 } else {
                     const remaining = Math.max(0, available - sellQty)
 
@@ -1376,7 +1376,7 @@ export default function ProgramDashboard() {
                                     value={addItemForm.sku}
                                     onChange={(e) => setAddItemForm((p) => ({ ...p, sku: e.target.value }))}
                                     className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                    placeholder="Optional…"
+                                    placeholder="e.g. AM95-001"
                                 />
                             </Field>
 
@@ -1639,13 +1639,26 @@ export default function ProgramDashboard() {
                                         </div>
                                     </div>
 
-                                    <label className="inline-flex items-center gap-2">
+                                    <label className="inline-flex items-center gap-3 select-none cursor-pointer">
                                         <input
                                             type="checkbox"
                                             checked={!!saleForm.removeFromInventory}
                                             onChange={(e) => setSaleForm((p) => ({ ...p, removeFromInventory: e.target.checked }))}
-                                            className="h-4 w-4 rounded border-white/20 bg-transparent accent-white"
+                                            className="sr-only"
                                         />
+                                        <span
+                                            className={[
+                                                "relative inline-flex h-6 w-11 items-center rounded-full border border-white/15 transition",
+                                                saleForm.removeFromInventory ? "bg-emerald-400/30" : "bg-white/10",
+                                            ].join(" ")}
+                                        >
+                                            <span
+                                                className={[
+                                                    "inline-block h-5 w-5 transform rounded-full bg-white shadow transition",
+                                                    saleForm.removeFromInventory ? "translate-x-5" : "translate-x-1",
+                                                ].join(" ")}
+                                            />
+                                        </span>
                                         <span className="text-sm font-semibold text-white/90">Enabled</span>
                                     </label>
                                 </div>
@@ -1658,71 +1671,34 @@ export default function ProgramDashboard() {
                                             className={[
                                                 "h-11 rounded-2xl border px-4 text-sm font-semibold transition",
                                                 saleForm.removeMode === "DECREMENT"
-                                                    ? "border-white/10 bg-white text-zinc-950"
-                                                    : "border-white/10 bg-white/5 text-white/90 hover:bg-white/10",
+                                                    ? "border-white/20 bg-white text-black"
+                                                    : "border-white/10 bg-white/5 text-white/80 hover:bg-white/10 hover:text-white",
                                             ].join(" ")}
                                         >
-                                            Decrement quantity
+                                            Decrement stock
                                         </button>
-
                                         <button
                                             type="button"
                                             onClick={() => setSaleForm((p) => ({ ...p, removeMode: "DELETE" }))}
                                             className={[
                                                 "h-11 rounded-2xl border px-4 text-sm font-semibold transition",
                                                 saleForm.removeMode === "DELETE"
-                                                    ? "border-red-400/20 bg-red-500/10 text-red-100"
-                                                    : "border-white/10 bg-white/5 text-white/90 hover:bg-white/10",
+                                                    ? "border-white/20 bg-white text-black"
+                                                    : "border-white/10 bg-white/5 text-white/80 hover:bg-white/10 hover:text-white",
                                             ].join(" ")}
                                         >
-                                            Delete item row
+                                            Delete item
                                         </button>
-
-                                        {saleForm.removeMode === "DELETE" ? (
-                                            <div className="sm:col-span-2 text-xs text-zinc-300">
-                                                Delete will remove the entire inventory row (even if only some units are sold). Decrement is
-                                                recommended.
-                                            </div>
-                                        ) : null}
                                     </div>
                                 ) : null}
-
-                                <div className="mt-4 grid gap-2 sm:grid-cols-3">
-                                    <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                                        <div className="text-[11px] font-semibold text-zinc-300">Gross</div>
-                                        <div className="mt-1 text-sm font-semibold text-white">
-                                            {fmt(selectedSaleItemComputed?.cur || currencyView, sellGrossPence)}
-                                        </div>
-                                    </div>
-                                    <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                                        <div className="text-[11px] font-semibold text-zinc-300">Cost</div>
-                                        <div className="mt-1 text-sm font-semibold text-white">
-                                            {fmt(selectedSaleItemComputed?.cur || currencyView, purchaseTotalForSoldUnitsPence)}
-                                        </div>
-                                    </div>
-                                    <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                                        <div className="text-[11px] font-semibold text-zinc-300">Profit</div>
-                                        <div
-                                            className={[
-                                                "mt-1 text-sm font-semibold",
-                                                sellGrossPence - purchaseTotalForSoldUnitsPence >= 0 ? "text-emerald-200" : "text-red-200",
-                                            ].join(" ")}
-                                        >
-                                            {fmt(
-                                                selectedSaleItemComputed?.cur || currencyView,
-                                                sellGrossPence - purchaseTotalForSoldUnitsPence
-                                            )}
-                                        </div>
-                                    </div>
-                                </div>
                             </div>
 
-                            <Field label="Notes" className="md:col-span-2">
+                            <Field label="Notes (optional)" className="md:col-span-2">
                                 <textarea
                                     value={saleForm.notes}
                                     onChange={(e) => setSaleForm((p) => ({ ...p, notes: e.target.value }))}
                                     className="min-h-[110px] w-full resize-none rounded-2xl border border-white/10 bg-zinc-950/60 px-4 py-3 text-sm text-white outline-none focus:border-white/20"
-                                    placeholder="Optional… e.g. bundle, partial refund, buyer issue…"
+                                    placeholder="Optional…"
                                 />
                             </Field>
                         </form>
