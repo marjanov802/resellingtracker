@@ -47,6 +47,25 @@ const pad2 = (n) => String(n).padStart(2, "0")
 
 /* ============================ Date helpers ============================ */
 
+// Parse date string robustly - handles both "2025-01-09" and "2025-01-09T10:30:00Z" formats
+const parseDate = (dateStr) => {
+    if (!dateStr) return null
+    // If it's already a Date object, return it
+    if (dateStr instanceof Date) return dateStr
+    const s = String(dateStr).trim()
+    if (!s) return null
+
+    // For date-only strings (YYYY-MM-DD), parse as local date to avoid timezone shifts
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+        const [year, month, day] = s.split("-").map(Number)
+        return new Date(year, month - 1, day)
+    }
+
+    // For full ISO strings, parse normally
+    const d = new Date(s)
+    return Number.isNaN(d.getTime()) ? null : d
+}
+
 const startOfLocalDay = (d) => {
     const x = new Date(d)
     x.setHours(0, 0, 0, 0)
@@ -76,11 +95,15 @@ const startOfLocalYear = (d) => {
     return x
 }
 
-const getRangeBounds = (range) => {
+const getRangeBounds = (range, customFrom = null, customTo = null) => {
     const now = new Date()
     if (range === "today") return { from: startOfLocalDay(now), to: endOfLocalDay(now) }
     if (range === "week") return { from: startOfLocalWeek(now), to: endOfLocalDay(now) }
     if (range === "month") return { from: startOfLocalMonth(now), to: endOfLocalDay(now) }
+    if (range === "year") return { from: startOfLocalYear(now), to: endOfLocalDay(now) }
+    if (range === "custom" && customFrom && customTo) {
+        return { from: startOfLocalDay(new Date(customFrom)), to: endOfLocalDay(new Date(customTo)) }
+    }
     return { from: startOfLocalYear(now), to: endOfLocalDay(now) }
 }
 
@@ -338,7 +361,7 @@ function Heatmap({ weeks, onHoverCell, onLeave, onClickCell, selectedKey, isDisa
                                             type="button"
                                             disabled={disabled || cell.key.startsWith("empty-")}
                                             className={[
-                                                "h-3 w-3 rounded-[4px] border transition",
+                                                "h-3 w-3 rounded-[4px] border border-transparent transition",
                                                 disabled ? base : base,
                                                 disabled ? "cursor-not-allowed" : "",
                                                 isSelected ? "ring-2 ring-white/60" : disabled ? "" : "hover:ring-2 hover:ring-white/30",
@@ -449,10 +472,17 @@ export default function AnalyticsPage() {
     const [sales, setSales] = useState([])
     const [items, setItems] = useState([])
 
-    // Range affects KPIs + charts (NOT the heatmap canvas)
+    // Range affects KPIs + charts + heatmap
     const [range, setRange] = useState("month")
 
-    // Heatmap is always fixed to YEAR window (current year)
+    // Custom date range
+    const [customFrom, setCustomFrom] = useState(() => {
+        const d = new Date()
+        d.setDate(d.getDate() - 30)
+        return toISODate(d)
+    })
+    const [customTo, setCustomTo] = useState(() => toISODate(new Date()))
+
     const [categoryFilter, setCategoryFilter] = useState("ALL")
 
     const [currencyView, setCurrencyView] = useState(() => {
@@ -550,16 +580,8 @@ export default function AnalyticsPage() {
         return ["ALL", ...arr]
     }, [items])
 
-    // Range bounds for KPIs + charts
-    const { from: rangeFrom, to: rangeTo } = useMemo(() => getRangeBounds(range), [range])
-
-    // Heatmap year bounds (fixed)
-    const heatYearBounds = useMemo(() => {
-        const now = new Date()
-        const from = startOfLocalYear(now)
-        const to = endOfLocalDay(now) // to "today" inside the year
-        return { from, to }
-    }, [])
+    // Range bounds for KPIs + charts + heatmap
+    const { from: rangeFrom, to: rangeTo } = useMemo(() => getRangeBounds(range, customFrom, customTo), [range, customFrom, customTo])
 
     // sales -> computed (for selected range)
     const computedSales = useMemo(() => {
@@ -568,8 +590,8 @@ export default function AnalyticsPage() {
 
         const list = sales
             .map((s) => {
-                const dt = s.soldAt ? new Date(s.soldAt) : null
-                const t = dt && !Number.isNaN(dt.getTime()) ? dt.getTime() : null
+                const dt = parseDate(s.soldAt)
+                const t = dt ? dt.getTime() : null
                 return { s, dt, t }
             })
             .filter((x) => x.t != null && x.t >= fromMs && x.t <= toMs)
@@ -617,62 +639,6 @@ export default function AnalyticsPage() {
         return list.filter((s) => s._category === categoryFilter).sort((a, b) => (b._t || 0) - (a._t || 0))
     }, [sales, rangeFrom, rangeTo, currencyView, fx.rates, itemById, categoryFilter])
 
-    // sales -> computed (for HEATMAP YEAR, fixed)
-    const computedSalesYear = useMemo(() => {
-        const fromMs = heatYearBounds.from.getTime()
-        const toMs = heatYearBounds.to.getTime()
-
-        const list = sales
-            .map((s) => {
-                const dt = s.soldAt ? new Date(s.soldAt) : null
-                const t = dt && !Number.isNaN(dt.getTime()) ? dt.getTime() : null
-                return { s, dt, t }
-            })
-            .filter((x) => x.t != null && x.t >= fromMs && x.t <= toMs)
-            .map((x) => {
-                const s = x.s
-                const cur = (s.currency || "GBP").toUpperCase()
-                const qty = safeNum(s.quantitySold, 0)
-                const ppu = safeNum(s.salePricePerUnitPence, 0)
-                const fees = safeNum(s.feesPence, 0)
-
-                const grossPence = qty * ppu
-                const netPence = s.netPence != null ? safeNum(s.netPence, 0) : Math.max(0, grossPence - fees)
-
-                const costTotal =
-                    s.costTotalPence != null
-                        ? safeNum(s.costTotalPence, 0)
-                        : s.costPerUnitPence != null
-                            ? safeNum(s.costPerUnitPence, 0) * qty
-                            : 0
-
-                const profitPence = netPence - costTotal
-
-                const netView = convertMinor(netPence, cur, currencyView, fx.rates).value
-                const profitView = convertMinor(profitPence, cur, currencyView, fx.rates).value
-                const costView = convertMinor(costTotal, cur, currencyView, fx.rates).value
-
-                const itemId = s.itemId != null ? String(s.itemId) : null
-                const itemRow = itemId ? itemById.get(itemId) : null
-                const category = itemRow?.c?.category || "Other"
-
-                return {
-                    ...s,
-                    _dt: x.dt,
-                    _t: x.t,
-                    _dayKey: x.dt ? toISODate(x.dt) : "—",
-                    _netView: netView,
-                    _profitView: profitView,
-                    _costView: costView,
-                    _qty: qty,
-                    _category: category,
-                }
-            })
-
-        if (categoryFilter === "ALL") return list.sort((a, b) => (b._t || 0) - (a._t || 0))
-        return list.filter((s) => s._category === categoryFilter).sort((a, b) => (b._t || 0) - (a._t || 0))
-    }, [sales, heatYearBounds, currencyView, fx.rates, itemById, categoryFilter])
-
     const headline = useMemo(() => {
         let revenue = 0
         let profit = 0
@@ -698,11 +664,11 @@ export default function AnalyticsPage() {
         }
     }, [computedSales])
 
-    /* ===================== Heatmap build (fixed year canvas) ===================== */
+    /* ===================== Heatmap build (uses selected range) ===================== */
 
     const heat = useMemo(() => {
-        const from = startOfLocalDay(heatYearBounds.from)
-        const to = endOfLocalDay(heatYearBounds.to)
+        const from = startOfLocalDay(rangeFrom)
+        const to = endOfLocalDay(rangeTo)
 
         const start = startOfLocalWeek(from)
 
@@ -714,28 +680,49 @@ export default function AnalyticsPage() {
         const daysCount = Math.ceil((endAligned.getTime() - start.getTime()) / 86400000) + 1
         const dayAgg = new Map()
 
-        for (const s of computedSalesYear) {
+        // Aggregate REVENUE from sales (use computedSales which is already filtered by range)
+        for (const s of computedSales) {
             if (!s._dt) continue
             const k = s._dayKey
-            if (!dayAgg.has(k)) dayAgg.set(k, { key: k, revenue: 0, spend: 0, profit: 0, units: 0, rows: 0 })
+            if (!dayAgg.has(k)) dayAgg.set(k, { key: k, revenue: 0, spend: 0, profit: 0, units: 0, rows: 0, spendItems: 0 })
             const a = dayAgg.get(k)
             a.revenue += s._netView
-            a.spend += safeNum(s._costView, 0)
             a.profit += s._profitView
             a.units += s._qty
             a.rows += 1
+        }
+
+        // Aggregate SPEND from inventory items by creation date (filter by range)
+        const fromMs = from.getTime()
+        const toMs = to.getTime()
+        for (const it of items) {
+            const dt = parseDate(it.createdAt)
+            if (!dt) continue
+            const t = dt.getTime()
+            if (t < fromMs || t > toMs) continue
+
+            const c = computeItem(it)
+            const cur = c.itemCur || "GBP"
+            const spendPence = c.purchaseTotal || 0
+            const spendView = convertMinor(spendPence, cur, currencyView, fx.rates).value
+
+            const k = toISODate(dt)
+            if (!dayAgg.has(k)) dayAgg.set(k, { key: k, revenue: 0, spend: 0, profit: 0, units: 0, rows: 0, spendItems: 0 })
+            const a = dayAgg.get(k)
+            a.spend += spendView
+            a.spendItems += 1
         }
 
         const allDays = []
         for (let i = 0; i < daysCount; i++) {
             const d = addDays(start, i)
             const key = toISODate(d)
-            const inYearWindow = d.getTime() >= from.getTime() && d.getTime() <= to.getTime()
-            const a = dayAgg.get(key) || { key, revenue: 0, spend: 0, profit: 0, units: 0, rows: 0 }
-            allDays.push({ ...a, date: d, inYearWindow })
+            const inWindow = d.getTime() >= from.getTime() && d.getTime() <= to.getTime()
+            const a = dayAgg.get(key) || { key, revenue: 0, spend: 0, profit: 0, units: 0, rows: 0, spendItems: 0 }
+            allDays.push({ ...a, date: d, inYearWindow: inWindow })
         }
 
-        // levels based on selected metric across the YEAR (non-zero days)
+        // levels based on selected metric - improved thresholds for better color distribution
         const metricKey = heatMetric === "spend" ? "spend" : "revenue"
         const vals = allDays
             .filter((d) => d.inYearWindow)
@@ -743,22 +730,17 @@ export default function AnalyticsPage() {
             .filter((v) => v > 0)
             .sort((a, b) => a - b)
 
-        const q = (p) => {
-            if (vals.length === 0) return 0
-            const idx = Math.max(0, Math.min(vals.length - 1, Math.floor((vals.length - 1) * p)))
-            return vals[idx]
-        }
-        const t1 = q(0.2)
-        const t2 = q(0.4)
-        const t3 = q(0.6)
-        const t4 = q(0.8)
+        // Use simpler thresholds: any value > 0 gets color, scale by max
+        const maxVal = vals.length > 0 ? vals[vals.length - 1] : 0
 
         const getLevel = (v) => {
             if (v <= 0) return 0
-            if (v <= t1) return 1
-            if (v <= t2) return 2
-            if (v <= t3) return 3
-            if (v <= t4) return 4
+            if (maxVal <= 0) return 1
+            const ratio = v / maxVal
+            if (ratio <= 0.1) return 1
+            if (ratio <= 0.25) return 2
+            if (ratio <= 0.5) return 3
+            if (ratio <= 0.75) return 4
             return 5
         }
 
@@ -791,6 +773,7 @@ export default function AnalyticsPage() {
                             profit: 0,
                             units: 0,
                             rows: 0,
+                            spendItems: 0,
                             date: new Date(),
                             inYearWindow: false,
                             level: 0,
@@ -801,20 +784,19 @@ export default function AnalyticsPage() {
         }
 
         return { from, to, weeks }
-    }, [computedSalesYear, heatYearBounds, heatMetric])
-
-    const rangeMask = useMemo(() => {
-        const b = getRangeBounds(range)
-        return { fromMs: b.from.getTime(), toMs: b.to.getTime() }
-    }, [range])
+    }, [computedSales, items, rangeFrom, rangeTo, currencyView, fx.rates, heatMetric])
 
     const isDisabledKey = (key) => {
         if (!key || key.startsWith("empty-")) return true
-        const d = new Date(key)
+        // Parse as local date
+        const d = parseDate(key)
+        if (!d) return true
         const t = d.getTime()
         if (Number.isNaN(t)) return true
-        // outside selected range => grey-out but still visible
-        if (t < rangeMask.fromMs || t > rangeMask.toMs) return true
+        // Check if within selected range
+        const fromMs = rangeFrom.getTime()
+        const toMs = rangeTo.getTime()
+        if (t < fromMs || t > toMs) return true
         return false
     }
 
@@ -897,8 +879,8 @@ export default function AnalyticsPage() {
 
     const selectedDaySales = useMemo(() => {
         if (!selectedDayKey) return []
-        return computedSalesYear.filter((s) => s._dayKey === selectedDayKey).slice(0, 12)
-    }, [computedSalesYear, selectedDayKey])
+        return computedSales.filter((s) => s._dayKey === selectedDayKey).slice(0, 12)
+    }, [computedSales, selectedDayKey])
 
     const columnsDay = useMemo(
         () => [
@@ -945,9 +927,12 @@ export default function AnalyticsPage() {
                     tone: cell.profit >= 0 ? "text-emerald-200" : "text-red-200",
                 },
                 ...(heatMetric === "spend"
-                    ? [{ k: "Revenue", v: fmt(currencyView, Math.round(cell.revenue)), tone: "text-white/70" }]
+                    ? [
+                        { k: "Items added", v: String(cell.spendItems || 0), tone: "text-white/85" },
+                        { k: "Revenue", v: fmt(currencyView, Math.round(cell.revenue)), tone: "text-white/70" },
+                    ]
                     : [{ k: "Spend", v: fmt(currencyView, Math.round(cell.spend)), tone: "text-white/70" }]),
-                { k: "Units", v: String(cell.units), tone: "text-white/85" },
+                { k: "Units sold", v: String(cell.units), tone: "text-white/85" },
                 { k: "Sales", v: String(cell.rows), tone: "text-white/85" },
             ],
         })
@@ -975,7 +960,7 @@ export default function AnalyticsPage() {
                     <div>
                         <h1 className="text-3xl font-semibold tracking-tight">Analytics</h1>
                         <p className="mt-1 text-sm text-white/50">
-                            Heatmap stays on the year. Range filters grey-out days and updates the rest.
+                            Spend tracks inventory by date added. Revenue tracks sales by date sold.
                         </p>
                     </div>
 
@@ -1028,38 +1013,83 @@ export default function AnalyticsPage() {
                 ) : null}
 
                 {/* Controls */}
-                <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-                    <Segmented
-                        value={range}
-                        onChange={(v) => {
-                            setRange(v)
-                            setSelectedDayKey(null)
-                        }}
-                        options={[
-                            { value: "today", label: "Today" },
-                            { value: "week", label: "Week" },
-                            { value: "month", label: "Month" },
-                            { value: "year", label: "Year" },
-                        ]}
-                    />
-
-                    <div className="flex flex-wrap items-center gap-2">
-                        <div className="text-xs font-semibold text-white/55">Category</div>
-                        <select
-                            value={categoryFilter}
-                            onChange={(e) => {
-                                setCategoryFilter(e.target.value)
-                                setSelectedDayKey(null)
-                            }}
-                            className="h-10 rounded-2xl border border-white/10 bg-zinc-950/70 px-3 text-sm text-zinc-100 outline-none"
-                        >
-                            {categories.map((c) => (
-                                <option key={c} value={c} className="bg-zinc-950 text-zinc-100">
-                                    {c}
-                                </option>
+                <div className="mb-6 flex flex-col gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex flex-wrap gap-2">
+                            {[
+                                { value: "today", label: "Today" },
+                                { value: "week", label: "Week" },
+                                { value: "month", label: "Month" },
+                                { value: "year", label: "Year" },
+                                { value: "custom", label: "Custom" },
+                            ].map((o) => (
+                                <button
+                                    key={o.value}
+                                    onClick={() => {
+                                        setRange(o.value)
+                                        setSelectedDayKey(null)
+                                    }}
+                                    className={[
+                                        "px-4 py-2 rounded-2xl text-sm font-semibold transition border",
+                                        range === o.value
+                                            ? "bg-white text-black border-white/10"
+                                            : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white border-white/10",
+                                    ].join(" ")}
+                                >
+                                    {o.label}
+                                </button>
                             ))}
-                        </select>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <div className="text-xs font-semibold text-white/55">Category</div>
+                                <select
+                                    value={categoryFilter}
+                                    onChange={(e) => {
+                                        setCategoryFilter(e.target.value)
+                                        setSelectedDayKey(null)
+                                    }}
+                                    className="h-10 rounded-2xl border border-white/10 bg-zinc-950/70 px-3 text-sm text-zinc-100 outline-none"
+                                >
+                                    {categories.map((c) => (
+                                        <option key={c} value={c} className="bg-zinc-950 text-zinc-100">
+                                            {c}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/60">
+                                Showing: <span className="font-semibold text-white">{rangeFrom.toLocaleDateString()} – {rangeTo.toLocaleDateString()}</span>
+                            </div>
+                        </div>
                     </div>
+
+                    {range === "custom" ? (
+                        <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+                            <div className="text-xs font-semibold text-zinc-300">From</div>
+                            <input
+                                type="date"
+                                value={customFrom}
+                                onChange={(e) => {
+                                    setCustomFrom(e.target.value)
+                                    setSelectedDayKey(null)
+                                }}
+                                className="h-10 rounded-2xl border border-white/10 bg-zinc-950/60 px-3 text-sm font-semibold text-white/90 outline-none focus:border-white/20 focus:ring-2 focus:ring-white/10 [color-scheme:dark]"
+                            />
+                            <div className="text-xs font-semibold text-zinc-300">To</div>
+                            <input
+                                type="date"
+                                value={customTo}
+                                onChange={(e) => {
+                                    setCustomTo(e.target.value)
+                                    setSelectedDayKey(null)
+                                }}
+                                className="h-10 rounded-2xl border border-white/10 bg-zinc-950/60 px-3 text-sm font-semibold text-white/90 outline-none focus:border-white/20 focus:ring-2 focus:ring-white/10 [color-scheme:dark]"
+                            />
+                        </div>
+                    ) : null}
                 </div>
 
                 {/* KPIs (profit + revenue first) */}
@@ -1082,8 +1112,8 @@ export default function AnalyticsPage() {
 
                 {/* Heatmap + drilldown kept together */}
                 <Card
-                    title={`${heatMetric === "spend" ? "Inventory spend" : "Revenue"} heatmap (year)`}
-                    subtitle={`Heatmap is fixed to this year • range greys out other dates • ${heat.from.toLocaleDateString()} → ${heat.to.toLocaleDateString()}`}
+                    title={`${heatMetric === "spend" ? "Inventory spend" : "Revenue"} heatmap`}
+                    subtitle={`${rangeFrom.toLocaleDateString()} → ${rangeTo.toLocaleDateString()} • ${heatMetric === "spend" ? "Items by date added" : "Sales by date sold"}`}
                     right={
                         <div className="flex flex-wrap items-center gap-2">
                             <Segmented

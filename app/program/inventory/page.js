@@ -352,6 +352,47 @@ function DollarIcon({ className = "" }) {
     )
 }
 
+function UploadIcon({ className = "" }) {
+    return (
+        <svg viewBox="0 0 24 24" className={["h-4 w-4", className].join(" ")} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+        </svg>
+    )
+}
+
+function DownloadIcon({ className = "" }) {
+    return (
+        <svg viewBox="0 0 24 24" className={["h-4 w-4", className].join(" ")} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+        </svg>
+    )
+}
+
+function FileIcon({ className = "" }) {
+    return (
+        <svg viewBox="0 0 24 24" className={["h-4 w-4", className].join(" ")} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+            <polyline points="10 9 9 9 8 9" />
+        </svg>
+    )
+}
+
+function ClipboardIcon({ className = "" }) {
+    return (
+        <svg viewBox="0 0 24 24" className={["h-4 w-4", className].join(" ")} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+            <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
+        </svg>
+    )
+}
+
 function TickButton({ checked, onToggle, title, disabled = false, className = "" }) {
     return (
         <button
@@ -592,6 +633,16 @@ export default function InventoryPage() {
     const [bulkSellSaving, setBulkSellSaving] = useState(false)
     const [bulkSellItems, setBulkSellItems] = useState([])
     // Each item in bulkSellItems: { item, quantitySold, salePricePerUnit, platform, notes }
+
+    // ============================================
+    // BULK IMPORT STATE
+    // ============================================
+    const [bulkImportOpen, setBulkImportOpen] = useState(false)
+    const [bulkImportSaving, setBulkImportSaving] = useState(false)
+    const [bulkImportTab, setBulkImportTab] = useState("file") // "file" | "paste"
+    const [bulkImportItems, setBulkImportItems] = useState([])
+    const [bulkImportPasteText, setBulkImportPasteText] = useState("")
+    // Each item: { id (temp), title, sku, quantity, category, condition, status, purchaseTotal, estimatedSale, notes, valid }
 
     const showToast = (type, msg) => {
         setToast({ type, msg })
@@ -907,6 +958,261 @@ export default function InventoryPage() {
             units: totalUnits,
         }
     }, [bulkSellItems])
+
+    // ============================================
+    // BULK IMPORT FUNCTIONS
+    // ============================================
+    const openBulkImport = () => {
+        setBulkImportItems([])
+        setBulkImportPasteText("")
+        setBulkImportTab("file")
+        setBulkImportOpen(true)
+    }
+
+    const generateBulkImportTemplate = () => {
+        const headers = ["Title*", "SKU", "Quantity", "Category", "Condition", "Status", "Purchase Price", "Estimated Sale", "Notes"]
+        const exampleRow = ["Example Item", "SKU-001", "1", "Clothes", "Good", "UNLISTED", "10.00", "20.00", "Optional notes"]
+
+        const csvContent = [
+            headers.join(","),
+            exampleRow.join(","),
+        ].join("\n")
+
+        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" })
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement("a")
+        link.href = url
+        link.download = "inventory_import_template.csv"
+        link.click()
+        URL.revokeObjectURL(url)
+        showToast("ok", "Template downloaded")
+    }
+
+    const parseCSVLine = (line) => {
+        const result = []
+        let current = ""
+        let inQuotes = false
+
+        for (let i = 0; i < line.length; i++) {
+            const char = line[i]
+            if (char === '"') {
+                if (inQuotes && line[i + 1] === '"') {
+                    current += '"'
+                    i++
+                } else {
+                    inQuotes = !inQuotes
+                }
+            } else if (char === "," && !inQuotes) {
+                result.push(current.trim())
+                current = ""
+            } else {
+                current += char
+            }
+        }
+        result.push(current.trim())
+        return result
+    }
+
+    const parseImportData = (text) => {
+        const lines = text.split(/\r?\n/).filter((line) => line.trim())
+        if (lines.length < 2) return []
+
+        // Detect delimiter (comma or tab)
+        const firstLine = lines[0]
+        const delimiter = firstLine.includes("\t") ? "\t" : ","
+
+        const parseLine = delimiter === "\t"
+            ? (line) => line.split("\t").map((s) => s.trim())
+            : parseCSVLine
+
+        const headers = parseLine(lines[0]).map((h) => h.toLowerCase().replace(/[*\s]/g, ""))
+
+        // Map headers to our fields
+        const headerMap = {
+            title: ["title", "name", "itemname", "item"],
+            sku: ["sku", "itemsku", "productsku", "code"],
+            quantity: ["quantity", "qty", "amount", "count"],
+            category: ["category", "cat", "type"],
+            condition: ["condition", "cond", "state"],
+            status: ["status", "liststatus"],
+            purchaseTotal: ["purchaseprice", "purchase", "cost", "buyprice", "purchasetotal", "costprice"],
+            estimatedSale: ["estimatedsale", "saleprice", "sellprice", "price", "expectedprice", "estimatedprice"],
+            notes: ["notes", "note", "description", "desc", "comments"],
+        }
+
+        const colIndex = {}
+        for (const [field, aliases] of Object.entries(headerMap)) {
+            for (let i = 0; i < headers.length; i++) {
+                if (aliases.includes(headers[i])) {
+                    colIndex[field] = i
+                    break
+                }
+            }
+        }
+
+        const items = []
+        for (let i = 1; i < lines.length; i++) {
+            const cols = parseLine(lines[i])
+            if (cols.every((c) => !c)) continue
+
+            const title = safeStr(cols[colIndex.title] || "")
+            const sku = safeStr(cols[colIndex.sku] || "")
+            const quantity = safeInt(cols[colIndex.quantity], 1)
+            const category = safeStr(cols[colIndex.category] || "") || "Clothes"
+            const condition = safeStr(cols[colIndex.condition] || "") || "Good"
+            const status = (safeStr(cols[colIndex.status] || "") || "UNLISTED").toUpperCase()
+            const purchaseTotal = safeStr(cols[colIndex.purchaseTotal] || "0")
+            const estimatedSale = safeStr(cols[colIndex.estimatedSale] || "0")
+            const notes = safeStr(cols[colIndex.notes] || "")
+
+            // Validate category
+            const validCategory = CATEGORIES.includes(category) ? category : "Other"
+            // Validate condition
+            const validCondition = CONDITIONS.includes(condition) ? condition : "Good"
+            // Validate status
+            const validStatus = ["UNLISTED", "LISTED"].includes(status) ? status : "UNLISTED"
+
+            items.push({
+                id: `import-${Date.now()}-${i}`,
+                title,
+                sku,
+                quantity: Math.max(1, quantity),
+                category: validCategory,
+                condition: validCondition,
+                status: validStatus,
+                purchaseTotal: purchaseTotal.replace(/[^\d.]/g, "") || "0",
+                estimatedSale: estimatedSale.replace(/[^\d.]/g, "") || "0",
+                notes,
+                valid: !!title,
+            })
+        }
+
+        return items
+    }
+
+    const handleBulkImportFile = async (e) => {
+        const file = e.target.files?.[0]
+        if (!file) return
+
+        const ext = file.name.split(".").pop()?.toLowerCase()
+
+        if (ext === "csv" || ext === "txt") {
+            const text = await file.text()
+            const items = parseImportData(text)
+            if (items.length === 0) {
+                showToast("error", "No valid rows found. Check your file format.")
+            } else {
+                setBulkImportItems(items)
+                showToast("ok", `Parsed ${items.length} item(s)`)
+            }
+        } else if (ext === "xlsx" || ext === "xls") {
+            showToast("error", "Excel files (.xlsx) are not directly supported. Please export as CSV first, or copy-paste from Excel.")
+        } else {
+            showToast("error", "Unsupported file type. Use CSV or TXT.")
+        }
+
+        e.target.value = ""
+    }
+
+    const handleBulkImportPaste = () => {
+        const text = bulkImportPasteText.trim()
+        if (!text) {
+            showToast("error", "Paste your data first")
+            return
+        }
+
+        const items = parseImportData(text)
+        if (items.length === 0) {
+            showToast("error", "No valid rows found. Make sure you include a header row.")
+        } else {
+            setBulkImportItems(items)
+            showToast("ok", `Parsed ${items.length} item(s)`)
+        }
+    }
+
+    const updateBulkImportItem = (id, patch) => {
+        setBulkImportItems((prev) =>
+            prev.map((item) => {
+                if (item.id !== id) return item
+                const updated = { ...item, ...patch }
+                updated.valid = !!safeStr(updated.title)
+                return updated
+            })
+        )
+    }
+
+    const removeBulkImportItem = (id) => {
+        setBulkImportItems((prev) => prev.filter((item) => item.id !== id))
+    }
+
+    const submitBulkImport = async () => {
+        const validItems = bulkImportItems.filter((item) => item.valid)
+        if (validItems.length === 0) {
+            showToast("error", "No valid items to import. Each item needs a title.")
+            return
+        }
+
+        setBulkImportSaving(true)
+        let successCount = 0
+        let failCount = 0
+
+        try {
+            for (const item of validItems) {
+                const purchaseTotalPence = parseMoneyToPence(item.purchaseTotal)
+                const estimatedSalePence = parseMoneyToPence(item.estimatedSale)
+
+                const meta = {
+                    currency: currencyView,
+                    status: item.status,
+                    category: item.category || null,
+                    condition: item.condition || null,
+                    purchaseTotalPence,
+                    estimatedSalePence,
+                    listings: [],
+                }
+
+                const payload = {
+                    name: safeStr(item.title),
+                    sku: safeStr(item.sku) || null,
+                    quantity: safeInt(item.quantity, 1),
+                    costPence: purchaseTotalPence,
+                    notes: encodeNotes(item.notes, meta),
+                }
+
+                try {
+                    const res = await fetch("/api/items", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(payload),
+                    })
+                    const data = await res.json().catch(() => null)
+                    if (!res.ok) throw new Error(data?.error || "Create failed")
+                    successCount++
+                } catch (err) {
+                    console.error(`Failed to create item "${item.title}":`, err)
+                    failCount++
+                }
+            }
+
+            if (failCount === 0) {
+                showToast("ok", `${successCount} item(s) imported successfully`)
+            } else {
+                showToast("error", `${successCount} succeeded, ${failCount} failed`)
+            }
+
+            setBulkImportOpen(false)
+            setBulkImportItems([])
+            await loadItems()
+        } catch (e) {
+            showToast("error", e?.message || "Bulk import failed")
+        } finally {
+            setBulkImportSaving(false)
+        }
+    }
+
+    const bulkImportValidCount = useMemo(() => {
+        return bulkImportItems.filter((item) => item.valid).length
+    }, [bulkImportItems])
 
     const openAdd = () => {
         setAddForm({
@@ -1482,6 +1788,11 @@ export default function InventoryPage() {
 
                         <button type="button" onClick={loadItems} className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15">
                             Refresh
+                        </button>
+
+                        <button type="button" onClick={openBulkImport} className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15 flex items-center gap-2">
+                            <UploadIcon className="h-4 w-4" />
+                            Bulk Import
                         </button>
 
                         <button type="button" onClick={openAdd} className="h-10 rounded-2xl bg-white px-4 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-100">
@@ -2236,6 +2547,287 @@ export default function InventoryPage() {
 
                         {bulkSellItems.length === 0 ? (
                             <div className="text-center py-8 text-zinc-400">No sellable items selected.</div>
+                        ) : null}
+                    </div>
+                </Modal>
+            ) : null}
+
+            {/* BULK IMPORT MODAL */}
+            {bulkImportOpen ? (
+                <Modal
+                    title="Bulk Import Inventory"
+                    onClose={() => setBulkImportOpen(false)}
+                    maxWidth="max-w-5xl"
+                    footer={
+                        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between sm:items-center">
+                            <div className="text-sm text-zinc-400">
+                                {bulkImportItems.length > 0 ? (
+                                    <span>{bulkImportValidCount} of {bulkImportItems.length} item(s) valid</span>
+                                ) : (
+                                    <span>Upload a file or paste data to begin</span>
+                                )}
+                            </div>
+                            <div className="flex gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setBulkImportOpen(false)}
+                                    className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={submitBulkImport}
+                                    disabled={bulkImportSaving || bulkImportValidCount === 0}
+                                    className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {bulkImportSaving ? "Importing…" : `Import ${bulkImportValidCount} Item(s)`}
+                                </button>
+                            </div>
+                        </div>
+                    }
+                >
+                    <div className="space-y-5">
+                        {/* Format Guide */}
+                        <div className="rounded-2xl border border-blue-400/20 bg-blue-500/10 p-4">
+                            <div className="flex items-start gap-3">
+                                <FileIcon className="h-5 w-5 text-blue-200 shrink-0 mt-0.5" />
+                                <div>
+                                    <div className="text-sm font-semibold text-blue-100">File Format Guide</div>
+                                    <div className="mt-1 text-xs text-blue-200/80">
+                                        Your file should have a header row with these columns: <span className="font-semibold">Title</span> (required), SKU, Quantity, Category, Condition, Status, Purchase Price, Estimated Sale, Notes.
+                                        Supported formats: CSV, TSV (tab-separated), or copy-paste from Excel/Google Sheets.
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={generateBulkImportTemplate}
+                                        className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-blue-100 hover:text-white"
+                                    >
+                                        <DownloadIcon className="h-3.5 w-3.5" />
+                                        Download CSV Template
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Tab Selection */}
+                        <div className="flex gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setBulkImportTab("file")}
+                                className={[
+                                    "h-10 px-4 rounded-xl text-sm font-semibold transition",
+                                    bulkImportTab === "file"
+                                        ? "bg-white text-zinc-950"
+                                        : "border border-white/10 bg-white/5 text-white/90 hover:bg-white/10",
+                                ].join(" ")}
+                            >
+                                <span className="flex items-center gap-2">
+                                    <UploadIcon className="h-4 w-4" />
+                                    Upload File
+                                </span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setBulkImportTab("paste")}
+                                className={[
+                                    "h-10 px-4 rounded-xl text-sm font-semibold transition",
+                                    bulkImportTab === "paste"
+                                        ? "bg-white text-zinc-950"
+                                        : "border border-white/10 bg-white/5 text-white/90 hover:bg-white/10",
+                                ].join(" ")}
+                            >
+                                <span className="flex items-center gap-2">
+                                    <ClipboardIcon className="h-4 w-4" />
+                                    Copy &amp; Paste
+                                </span>
+                            </button>
+                        </div>
+
+                        {/* File Upload Tab */}
+                        {bulkImportTab === "file" ? (
+                            <div className="rounded-2xl border-2 border-dashed border-white/20 p-8 text-center">
+                                <UploadIcon className="h-10 w-10 mx-auto text-zinc-400" />
+                                <div className="mt-3 text-sm text-zinc-300">
+                                    Drag and drop a CSV file, or click to browse
+                                </div>
+                                <input
+                                    type="file"
+                                    accept=".csv,.txt,.tsv"
+                                    onChange={handleBulkImportFile}
+                                    className="absolute inset-0 opacity-0 cursor-pointer"
+                                    style={{ position: "relative", width: "100%", height: "48px", marginTop: "12px" }}
+                                />
+                                <label className="mt-3 inline-block cursor-pointer">
+                                    <span className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white hover:bg-white/15">
+                                        Choose File
+                                    </span>
+                                    <input
+                                        type="file"
+                                        accept=".csv,.txt,.tsv"
+                                        onChange={handleBulkImportFile}
+                                        className="sr-only"
+                                    />
+                                </label>
+                            </div>
+                        ) : null}
+
+                        {/* Paste Tab */}
+                        {bulkImportTab === "paste" ? (
+                            <div className="space-y-3">
+                                <div className="text-xs text-zinc-400">
+                                    Copy cells from Excel or Google Sheets (including the header row) and paste below:
+                                </div>
+                                <textarea
+                                    value={bulkImportPasteText}
+                                    onChange={(e) => setBulkImportPasteText(e.target.value)}
+                                    placeholder={"Title\tSKU\tQuantity\tCategory\tCondition\tStatus\tPurchase Price\tEstimated Sale\tNotes\nMy Item\tSKU-001\t1\tClothes\tGood\tUNLISTED\t10.00\t20.00\tNotes here"}
+                                    className="w-full h-40 rounded-xl border border-white/10 bg-zinc-950/60 px-4 py-3 text-sm text-white placeholder:text-zinc-500 outline-none focus:border-white/20 font-mono"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={handleBulkImportPaste}
+                                    className="h-10 rounded-xl bg-white/10 border border-white/10 px-4 text-sm font-semibold text-white hover:bg-white/15"
+                                >
+                                    Parse Data
+                                </button>
+                            </div>
+                        ) : null}
+
+                        {/* Preview Table */}
+                        {bulkImportItems.length > 0 ? (
+                            <div className="space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <div className="text-sm font-semibold text-white">Preview ({bulkImportItems.length} items)</div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setBulkImportItems([])}
+                                        className="text-xs text-zinc-400 hover:text-white"
+                                    >
+                                        Clear all
+                                    </button>
+                                </div>
+
+                                <div className="max-h-[400px] overflow-auto rounded-xl border border-white/10">
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-white/5 sticky top-0">
+                                            <tr>
+                                                <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-300">Title</th>
+                                                <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-300">SKU</th>
+                                                <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-300">Qty</th>
+                                                <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-300">Category</th>
+                                                <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-300">Condition</th>
+                                                <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-300">Status</th>
+                                                <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-300">Purchase</th>
+                                                <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-300">Est. Sale</th>
+                                                <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-300 w-10"></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-white/10">
+                                            {bulkImportItems.map((item) => (
+                                                <tr key={item.id} className={item.valid ? "bg-zinc-950" : "bg-red-500/10"}>
+                                                    <td className="px-3 py-2">
+                                                        <input
+                                                            type="text"
+                                                            value={item.title}
+                                                            onChange={(e) => updateBulkImportItem(item.id, { title: e.target.value })}
+                                                            className={[
+                                                                "w-full min-w-[150px] rounded border bg-transparent px-2 py-1 text-sm text-white outline-none",
+                                                                item.valid ? "border-white/10 focus:border-white/20" : "border-red-400/50",
+                                                            ].join(" ")}
+                                                            placeholder="Required"
+                                                        />
+                                                    </td>
+                                                    <td className="px-3 py-2">
+                                                        <input
+                                                            type="text"
+                                                            value={item.sku}
+                                                            onChange={(e) => updateBulkImportItem(item.id, { sku: e.target.value })}
+                                                            className="w-full min-w-[80px] rounded border border-white/10 bg-transparent px-2 py-1 text-sm text-white outline-none focus:border-white/20"
+                                                        />
+                                                    </td>
+                                                    <td className="px-3 py-2">
+                                                        <input
+                                                            type="number"
+                                                            min={1}
+                                                            value={item.quantity}
+                                                            onChange={(e) => updateBulkImportItem(item.id, { quantity: e.target.value })}
+                                                            className="w-16 rounded border border-white/10 bg-transparent px-2 py-1 text-sm text-white outline-none focus:border-white/20"
+                                                        />
+                                                    </td>
+                                                    <td className="px-3 py-2">
+                                                        <select
+                                                            value={item.category}
+                                                            onChange={(e) => updateBulkImportItem(item.id, { category: e.target.value })}
+                                                            className="rounded border border-white/10 bg-zinc-900 px-2 py-1 text-sm text-white outline-none"
+                                                        >
+                                                            {CATEGORIES.map((c) => (
+                                                                <option key={c} value={c}>{c}</option>
+                                                            ))}
+                                                        </select>
+                                                    </td>
+                                                    <td className="px-3 py-2">
+                                                        <select
+                                                            value={item.condition}
+                                                            onChange={(e) => updateBulkImportItem(item.id, { condition: e.target.value })}
+                                                            className="rounded border border-white/10 bg-zinc-900 px-2 py-1 text-sm text-white outline-none"
+                                                        >
+                                                            {CONDITIONS.map((c) => (
+                                                                <option key={c} value={c}>{c}</option>
+                                                            ))}
+                                                        </select>
+                                                    </td>
+                                                    <td className="px-3 py-2">
+                                                        <select
+                                                            value={item.status}
+                                                            onChange={(e) => updateBulkImportItem(item.id, { status: e.target.value })}
+                                                            className="rounded border border-white/10 bg-zinc-900 px-2 py-1 text-sm text-white outline-none"
+                                                        >
+                                                            {STATUSES.map(([v, l]) => (
+                                                                <option key={v} value={v}>{l}</option>
+                                                            ))}
+                                                        </select>
+                                                    </td>
+                                                    <td className="px-3 py-2">
+                                                        <input
+                                                            type="text"
+                                                            inputMode="decimal"
+                                                            value={item.purchaseTotal}
+                                                            onChange={(e) => updateBulkImportItem(item.id, { purchaseTotal: e.target.value })}
+                                                            className="w-20 rounded border border-white/10 bg-transparent px-2 py-1 text-sm text-white outline-none focus:border-white/20"
+                                                        />
+                                                    </td>
+                                                    <td className="px-3 py-2">
+                                                        <input
+                                                            type="text"
+                                                            inputMode="decimal"
+                                                            value={item.estimatedSale}
+                                                            onChange={(e) => updateBulkImportItem(item.id, { estimatedSale: e.target.value })}
+                                                            className="w-20 rounded border border-white/10 bg-transparent px-2 py-1 text-sm text-white outline-none focus:border-white/20"
+                                                        />
+                                                    </td>
+                                                    <td className="px-3 py-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => removeBulkImportItem(item.id)}
+                                                            className="h-7 w-7 rounded-lg border border-red-400/20 bg-red-500/10 text-red-100 hover:bg-red-500/15 flex items-center justify-center"
+                                                            title="Remove"
+                                                        >
+                                                            <TrashIcon className="h-3.5 w-3.5" />
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                {bulkImportItems.some((item) => !item.valid) ? (
+                                    <div className="text-xs text-red-300">
+                                        Items highlighted in red are missing a title and won&apos;t be imported.
+                                    </div>
+                                ) : null}
+                            </div>
                         ) : null}
                     </div>
                 </Modal>
