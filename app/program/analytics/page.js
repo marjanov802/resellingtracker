@@ -702,8 +702,8 @@ export default function AnalyticsPage() {
             if (t < fromMs || t > toMs) continue
 
             const c = computeItem(it)
-            const cur = c.itemCur || "GBP"
-            const spendPence = c.purchaseTotal || 0
+            const cur = c.cur || "GBP"
+            const spendPence = c.invValue || 0  // invValue = perUnit * quantity
             const spendView = convertMinor(spendPence, cur, currencyView, fx.rates).value
 
             const k = toISODate(dt)
