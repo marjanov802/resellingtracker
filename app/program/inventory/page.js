@@ -3,6 +3,24 @@
 
 import { useEffect, useMemo, useState } from "react"
 
+// ===================== Image Upload Helpers =====================
+const fileToDataUrl = (file) =>
+    new Promise((resolve, reject) => {
+        if (!file) return resolve("");
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+
+const isImageFile = (file) => {
+    if (!file) return false;
+    return typeof file.type === "string" && file.type.startsWith("image/");
+};
+
+const MAX_IMAGE_BYTES = 3 * 1024 * 1024; // 3MB limit
+// ================================================================
+
 const MAX_VISIBLE_COLUMNS = 6
 
 const CURRENCY_META = {
@@ -100,6 +118,16 @@ const decodeNotes = (notes) => {
     }
 }
 
+// Sale notes encoding (stores imageUrl so it persists with the sale record)
+const encodeSaleNotes = (plainNotes, meta) => {
+    const payload = {
+        _saleV: 1,
+        notes: String(plainNotes || "").trim() || "",
+        meta: meta && typeof meta === "object" ? meta : {},
+    }
+    return JSON.stringify(payload)
+}
+
 function normaliseMeta(meta) {
     const m = meta && typeof meta === "object" ? meta : {}
 
@@ -107,6 +135,7 @@ function normaliseMeta(meta) {
     const status = (m.status || "UNLISTED").toUpperCase()
     const category = m.category || null
     const condition = m.condition || null
+    const imageUrl = m.imageUrl || null
 
     const purchaseTotalPence = Number(m.purchaseTotalPence) || 0
     const estimatedSalePence = m.estimatedSalePence == null ? null : Number(m.estimatedSalePence)
@@ -138,6 +167,7 @@ function normaliseMeta(meta) {
         status,
         category,
         condition,
+        imageUrl,
         purchaseTotalPence,
         estimatedSalePence: estimatedFromLegacy,
         listings,
@@ -595,7 +625,37 @@ export default function InventoryPage() {
         listings: [],
 
         notes: "",
+        imageUrl: "",
     }))
+
+    // ===================== Add Form Image State =====================
+    const [addImageFile, setAddImageFile] = useState(null);
+    const [addImageError, setAddImageError] = useState("");
+
+    const handleAddImageChange = async (e) => {
+        const file = e?.target?.files?.[0] || null;
+        setAddImageError("");
+        setAddImageFile(null);
+
+        if (!file) {
+            setAddForm((prev) => ({ ...prev, imageUrl: "" }));
+            return;
+        }
+        if (!isImageFile(file)) {
+            setAddImageError("Please select an image file.");
+            e.target.value = "";
+            return;
+        }
+        if (file.size > MAX_IMAGE_BYTES) {
+            setAddImageError("Image is too large (max 3MB).");
+            e.target.value = "";
+            return;
+        }
+        const dataUrl = await fileToDataUrl(file);
+        setAddImageFile(file);
+        setAddForm((prev) => ({ ...prev, imageUrl: dataUrl }));
+    };
+    // ================================================================
 
     /**
      * ADDITION: URL import state (Add modal only)
@@ -624,7 +684,37 @@ export default function InventoryPage() {
         listings: [],
 
         notes: "",
+        imageUrl: "",
     }))
+
+    // ===================== Edit Form Image State =====================
+    const [editImageFile, setEditImageFile] = useState(null);
+    const [editImageError, setEditImageError] = useState("");
+
+    const handleEditImageChange = async (e) => {
+        const file = e?.target?.files?.[0] || null;
+        setEditImageError("");
+        setEditImageFile(null);
+
+        if (!file) {
+            setEditForm((prev) => ({ ...prev, imageUrl: "" }));
+            return;
+        }
+        if (!isImageFile(file)) {
+            setEditImageError("Please select an image file.");
+            e.target.value = "";
+            return;
+        }
+        if (file.size > MAX_IMAGE_BYTES) {
+            setEditImageError("Image is too large (max 3MB).");
+            e.target.value = "";
+            return;
+        }
+        const dataUrl = await fileToDataUrl(file);
+        setEditImageFile(file);
+        setEditForm((prev) => ({ ...prev, imageUrl: dataUrl }));
+    };
+    // =================================================================
 
     // ============================================
     // BULK MARK AS SOLD STATE
@@ -859,6 +949,11 @@ export default function InventoryPage() {
                 const sellGrossPence = sellQty * sellPricePerUnitPence
 
                 // 1. Create sale record
+                // Encode imageUrl into the notes field so it persists with the sale
+                const saleNotesEncoded = encodeSaleNotes(entry.notes, {
+                    imageUrl: c?.meta?.imageUrl || null
+                })
+
                 const salePayload = {
                     itemId: String(it.id),
                     itemName: it.name || null,
@@ -871,7 +966,9 @@ export default function InventoryPage() {
                     netPence: sellGrossPence,
                     costTotalPence: purchaseTotalForSoldUnitsPence,
                     currency: saleCur,
-                    notes: String(entry.notes || "").trim() || null,
+                    notes: saleNotesEncoded,
+                    // Also send as top-level field in case API supports it
+                    imageUrl: c?.meta?.imageUrl || null,
                 }
 
                 try {
@@ -1233,7 +1330,10 @@ export default function InventoryPage() {
             listings: [],
 
             notes: "",
+            imageUrl: "",
         })
+        setAddImageFile(null)
+        setAddImageError("")
         setImportUrl("")
         setImporting(false)
         setAddOpen(true)
@@ -1328,6 +1428,7 @@ export default function InventoryPage() {
             status,
             category: addForm.category || null,
             condition: addForm.condition || null,
+            imageUrl: addForm.imageUrl || null,
 
             purchaseTotalPence,
             estimatedSalePence,
@@ -1391,8 +1492,11 @@ export default function InventoryPage() {
             listings: rest,
 
             notes: decoded.notes || "",
+            imageUrl: meta.imageUrl || "",
         })
 
+        setEditImageFile(null)
+        setEditImageError("")
         setEditOpen(true)
     }
 
@@ -1446,6 +1550,7 @@ export default function InventoryPage() {
             status,
             category: editForm.category || null,
             condition: editForm.condition || null,
+            imageUrl: editForm.imageUrl || null,
 
             purchaseTotalPence,
             estimatedSalePence,
@@ -1867,13 +1972,32 @@ export default function InventoryPage() {
                                     {filteredItems.map((it, idx) => {
                                         const rowBg = idx % 2 === 0 ? "bg-zinc-950" : "bg-zinc-900"
                                         const checked = selected.has(it.id)
+                                        const itemMeta = compute(it).meta
 
                                         return (
                                             <div key={it.id} className={["flex items-center gap-3 cursor-pointer", ROW_H, CELL_PAD, CELL_Y, rowBg, "hover:bg-white/5"].join(" ")} onClick={() => openDetail(it)}>
                                                 <TickButton checked={checked} onToggle={() => toggleSelect(it.id)} title={checked ? "Unselect" : "Select"} />
 
-                                                <div className="min-w-0 w-full">
-                                                    <div className="truncate text-[13px] font-semibold text-white">{it.name}</div>
+                                                <div className="min-w-0 flex-1 flex items-center justify-between gap-3">
+                                                    <div className="min-w-0">
+                                                        <div className="truncate text-[13px] font-semibold text-white">{it.name}</div>
+                                                        {it.sku ? <div className="truncate text-xs text-zinc-400">{it.sku}</div> : null}
+                                                    </div>
+
+                                                    <div className="shrink-0 border-l border-white/10 pl-3 flex items-center">
+                                                        {itemMeta.imageUrl ? (
+                                                            <img
+                                                                src={itemMeta.imageUrl}
+                                                                alt={it.name}
+                                                                className="w-10 h-10 rounded-lg object-cover"
+                                                                loading="lazy"
+                                                            />
+                                                        ) : (
+                                                            <div className="w-10 h-10 rounded-lg border border-white/10 flex items-center justify-center text-[10px] text-zinc-500 bg-zinc-900/50">
+                                                                No img
+                                                            </div>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             </div>
                                         )
@@ -2114,6 +2238,38 @@ export default function InventoryPage() {
                                 <input value={addForm.title} onChange={(e) => onAddChange({ title: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="Item name…" />
                             </Field>
 
+                            {/* ===================== Image Upload ===================== */}
+                            <div className="md:col-span-2">
+                                <div className="text-xs font-semibold text-zinc-300 mb-2">Image</div>
+                                <div className="flex items-start gap-4">
+                                    <div className="flex-1">
+                                        <input
+                                            type="file"
+                                            accept="image/*"
+                                            onChange={handleAddImageChange}
+                                            className="block w-full text-sm text-zinc-300 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-white/10 file:text-white hover:file:bg-white/15 border border-white/10 rounded-2xl p-2 bg-zinc-950/60"
+                                        />
+                                        {addImageError ? (
+                                            <p className="mt-2 text-sm text-red-400">{addImageError}</p>
+                                        ) : (
+                                            <p className="mt-2 text-xs text-zinc-400">PNG/JPG recommended. Max 3MB.</p>
+                                        )}
+                                    </div>
+                                    <div className="w-20 h-20 border border-white/10 rounded-2xl overflow-hidden flex items-center justify-center bg-zinc-950/60 shrink-0">
+                                        {addForm.imageUrl ? (
+                                            <img
+                                                src={addForm.imageUrl}
+                                                alt="Item preview"
+                                                className="w-full h-full object-cover"
+                                            />
+                                        ) : (
+                                            <span className="text-xs text-zinc-500">No image</span>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                            {/* ======================================================= */}
+
                             <Field label="SKU">
                                 <input value={addForm.sku} onChange={(e) => onAddChange({ sku: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="Optional…" />
                             </Field>
@@ -2269,6 +2425,47 @@ export default function InventoryPage() {
                             <Field label="Title *" className="md:col-span-2">
                                 <input value={editForm.title} onChange={(e) => onEditChange({ title: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="Item name…" />
                             </Field>
+
+                            {/* ===================== Image Upload ===================== */}
+                            <div className="md:col-span-2">
+                                <div className="text-xs font-semibold text-zinc-300 mb-2">Image</div>
+                                <div className="flex items-start gap-4">
+                                    <div className="flex-1">
+                                        <input
+                                            type="file"
+                                            accept="image/*"
+                                            onChange={handleEditImageChange}
+                                            className="block w-full text-sm text-zinc-300 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-white/10 file:text-white hover:file:bg-white/15 border border-white/10 rounded-2xl p-2 bg-zinc-950/60"
+                                        />
+                                        {editImageError ? (
+                                            <p className="mt-2 text-sm text-red-400">{editImageError}</p>
+                                        ) : (
+                                            <p className="mt-2 text-xs text-zinc-400">PNG/JPG recommended. Max 3MB.</p>
+                                        )}
+                                    </div>
+                                    <div className="w-20 h-20 border border-white/10 rounded-2xl overflow-hidden flex items-center justify-center bg-zinc-950/60 shrink-0">
+                                        {editForm.imageUrl ? (
+                                            <img
+                                                src={editForm.imageUrl}
+                                                alt="Item preview"
+                                                className="w-full h-full object-cover"
+                                            />
+                                        ) : (
+                                            <span className="text-xs text-zinc-500">No image</span>
+                                        )}
+                                    </div>
+                                </div>
+                                {editForm.imageUrl && (
+                                    <button
+                                        type="button"
+                                        onClick={() => onEditChange({ imageUrl: "" })}
+                                        className="mt-2 text-xs text-red-400 hover:text-red-300"
+                                    >
+                                        Remove image
+                                    </button>
+                                )}
+                            </div>
+                            {/* ======================================================= */}
 
                             <Field label="SKU">
                                 <input value={editForm.sku} onChange={(e) => onEditChange({ sku: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20" placeholder="Optional…" />
@@ -2849,6 +3046,19 @@ function DetailPanel({ item, currencyView, rates }) {
 
     return (
         <div className="grid gap-4 md:grid-cols-2">
+            {/* Image display */}
+            {c.meta.imageUrl ? (
+                <div className="md:col-span-2 flex justify-center">
+                    <div className="rounded-2xl border border-white/10 overflow-hidden bg-zinc-950/30 p-2">
+                        <img
+                            src={c.meta.imageUrl}
+                            alt={item.name || "Item"}
+                            className="max-h-48 rounded-xl object-contain"
+                        />
+                    </div>
+                </div>
+            ) : null}
+
             <Card title="Item">
                 <Row label="Status" value={<Pill text={c.status} />} />
                 <Row label="Category" value={c.meta.category || "—"} />

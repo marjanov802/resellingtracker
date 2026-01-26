@@ -1,6 +1,25 @@
+// app/program/sales/page.js
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+
+// ===================== Image Upload Helpers =====================
+const fileToDataUrl = (file) =>
+    new Promise((resolve, reject) => {
+        if (!file) return resolve("");
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+
+const isImageFile = (file) => {
+    if (!file) return false;
+    return typeof file.type === "string" && file.type.startsWith("image/");
+};
+
+const MAX_IMAGE_BYTES = 3 * 1024 * 1024; // 3MB limit
+// ================================================================
 
 const CURRENCY_META = {
     GBP: { symbol: "£", label: "GBP" },
@@ -89,6 +108,31 @@ const encodeNotes = (plainNotes, meta) => {
     return JSON.stringify(payload)
 }
 
+// Sale notes encoding (stores imageUrl and other sale-specific meta)
+const decodeSaleNotes = (notes) => {
+    const s = String(notes ?? "")
+    if (!s) return { notes: "", meta: {} }
+    try {
+        const o = JSON.parse(s)
+        if (o && typeof o === "object" && o._saleV === 1) {
+            return { notes: String(o.notes || ""), meta: o.meta && typeof o.meta === "object" ? o.meta : {} }
+        }
+        // Not our format, return as plain notes
+        return { notes: s, meta: {} }
+    } catch {
+        return { notes: s, meta: {} }
+    }
+}
+
+const encodeSaleNotes = (plainNotes, meta) => {
+    const payload = {
+        _saleV: 1,
+        notes: String(plainNotes || "").trim() || "",
+        meta: meta && typeof meta === "object" ? meta : {},
+    }
+    return JSON.stringify(payload)
+}
+
 function normaliseMeta(meta) {
     const m = meta && typeof meta === "object" ? meta : {}
 
@@ -96,6 +140,7 @@ function normaliseMeta(meta) {
     const status = (m.status || "UNLISTED").toUpperCase()
     const category = m.category || null
     const condition = m.condition || null
+    const imageUrl = m.imageUrl || null
 
     const purchaseTotalPence = Number(m.purchaseTotalPence) || 0
     const estimatedSalePence = m.estimatedSalePence == null ? null : Number(m.estimatedSalePence)
@@ -121,6 +166,7 @@ function normaliseMeta(meta) {
         status,
         category,
         condition,
+        imageUrl,
         purchaseTotalPence,
         estimatedSalePence: estimatedFromLegacy,
         listings,
@@ -344,6 +390,50 @@ const parseDateInputToLocalRange = (fromYmd, toYmd) => {
         from: fromDate && !Number.isNaN(fromDate.getTime()) ? fromDate : null,
         to: toDate && !Number.isNaN(toDate.getTime()) ? toDate : null,
     }
+}
+
+// Helper to get imageUrl for a sale (from sale record or items lookup)
+function getImageUrlForSale(sale, items) {
+    // 1) direct on sale (support common variants)
+    const direct =
+        sale?.imageUrl ||
+        sale?.image_url ||
+        sale?.imageURL ||
+        sale?.imageurl ||
+        sale?.meta?.imageUrl ||
+        sale?.meta?.image_url ||
+        null
+
+    if (direct) return direct
+
+    // 1b) Check for imageUrl stored in the encoded notes field
+    if (sale?.notes) {
+        const decodedSaleNotes = decodeSaleNotes(sale.notes)
+        const notesImageUrl = decodedSaleNotes?.meta?.imageUrl || null
+        if (notesImageUrl) return notesImageUrl
+    }
+
+    // 2) fallback: look up the item in items (only works if item still exists in inventory list)
+    const saleItemId =
+        sale?.itemId ||
+        sale?.item_id ||
+        sale?.itemid ||
+        sale?.item?.id ||
+        null
+
+    if (!saleItemId) return null
+    if (!Array.isArray(items) || items.length === 0) return null
+
+    const item = items.find((it) => String(it?.id || it?._id) === String(saleItemId))
+    if (!item) return null
+
+    // 2a) support top-level imageUrl on the inventory item
+    const itemDirect = item?.imageUrl || item?.image_url || item?.imageURL || item?.imageurl || null
+    if (itemDirect) return itemDirect
+
+    // 2b) support imageUrl stored inside notes/meta (your computeItem pipeline)
+    const computed = computeItem(item)
+    return computed?.meta?.imageUrl || computed?.meta?.image_url || null
 }
 
 export default function SalesPage() {
@@ -585,6 +675,11 @@ export default function SalesPage() {
 
         const saleCur = (c.itemCur || "GBP").toUpperCase()
 
+        // Encode imageUrl into the notes field so it persists with the sale
+        const saleNotesEncoded = encodeSaleNotes(sellForm.notes, {
+            imageUrl: c.meta.imageUrl || null
+        })
+
         const salePayload = {
             itemId: String(it.id),
             itemName: it.name || null,
@@ -597,7 +692,11 @@ export default function SalesPage() {
             netPence: sellGrossPence,
             costTotalPence: purchaseTotalForSoldUnitsPence,
             currency: saleCur,
-            notes: String(sellForm.notes || "").trim() || null,
+            notes: saleNotesEncoded,
+
+            // Also send as top-level fields in case API supports them
+            imageUrl: c.meta.imageUrl || null,
+            image_url: c.meta.imageUrl || null,
         }
 
         setAddSaving(true)
@@ -1089,6 +1188,9 @@ export default function SalesPage() {
                                 const sid = String(s.id)
                                 const checked = selectedIds.has(sid)
 
+                                // Get image from items lookup
+                                const imageUrl = getImageUrlForSale(s, items)
+
                                 return (
                                     <div
                                         key={s.id || `${s.itemId}-${idx}`}
@@ -1111,9 +1213,30 @@ export default function SalesPage() {
                                         </div>
 
                                         <div className={["flex min-w-0 items-center overflow-hidden", CELL_PAD, CELL_Y].join(" ")}>
-                                            <div className="min-w-0">
-                                                <div className="truncate text-[13px] font-semibold text-white">{s.itemName || s.item?.name || "—"}</div>
-                                                <div className="mt-0.5 truncate text-[11px] text-zinc-400">{s.sku || s.itemSku || "—"}</div>
+                                            <div className="min-w-0 flex-1 flex items-center justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <div className="truncate text-[13px] font-semibold text-white">{s.itemName || s.item?.name || "—"}</div>
+                                                    <div className="mt-0.5 truncate text-[11px] text-zinc-400">{s.sku || s.itemSku || "—"}</div>
+                                                </div>
+
+                                                <div className="shrink-0 border-l border-white/10 pl-3 flex items-center">
+                                                    {loadingItems ? (
+                                                        <div className="w-10 h-10 rounded-lg border border-white/10 flex items-center justify-center text-[10px] text-zinc-500 bg-zinc-900/50 animate-pulse">
+                                                            …
+                                                        </div>
+                                                    ) : imageUrl ? (
+                                                        <img
+                                                            src={imageUrl}
+                                                            alt={s.itemName || "Item"}
+                                                            className="w-10 h-10 rounded-lg object-cover"
+                                                            loading="lazy"
+                                                        />
+                                                    ) : (
+                                                        <div className="w-10 h-10 rounded-lg border border-white/10 flex items-center justify-center text-[10px] text-zinc-500 bg-zinc-900/50">
+                                                            No img
+                                                        </div>
+                                                    )}
+                                                </div>
                                             </div>
                                         </div>
 
@@ -1313,6 +1436,19 @@ export default function SalesPage() {
                 >
                     <form id="rt-sale-form" onSubmit={submitSale} className="space-y-4">
                         <div className="grid gap-4 md:grid-cols-2">
+                            {/* Show selected item image */}
+                            {selectedItemComputed?.meta?.imageUrl ? (
+                                <div className="md:col-span-2 flex justify-center">
+                                    <div className="rounded-2xl border border-white/10 overflow-hidden bg-zinc-950/30 p-2">
+                                        <img
+                                            src={selectedItemComputed.meta.imageUrl}
+                                            alt={selectedItem?.name || "Item"}
+                                            className="max-h-32 rounded-xl object-contain"
+                                        />
+                                    </div>
+                                </div>
+                            ) : null}
+
                             <Field label="Item *" className="md:col-span-2">
                                 <select
                                     value={sellForm.itemId}
@@ -1518,14 +1654,14 @@ export default function SalesPage() {
                         </div>
                     }
                 >
-                    <SaleDetail sale={selectedSale} currencyView={currencyView} rates={fx.rates} />
+                    <SaleDetail sale={selectedSale} currencyView={currencyView} rates={fx.rates} items={items} />
                 </Modal>
             ) : null}
         </div>
     )
 }
 
-function SaleDetail({ sale, currencyView, rates }) {
+function SaleDetail({ sale, currencyView, rates, items }) {
     const cur = (sale.currency || "GBP").toUpperCase()
     const qty = Number(sale.quantitySold || 0) || 0
     const ppu = Number(sale.salePricePerUnitPence || 0) || 0
@@ -1539,8 +1675,28 @@ function SaleDetail({ sale, currencyView, rates }) {
     const soldAt = sale.soldAt ? new Date(sale.soldAt) : null
     const soldAtLabel = soldAt && !Number.isNaN(soldAt.getTime()) ? soldAt.toLocaleString() : "—"
 
+    // Get image from items lookup
+    const imageUrl = getImageUrlForSale(sale, items)
+
+    // Decode sale notes to show plain text (not JSON)
+    const decodedNotes = decodeSaleNotes(sale.notes)
+    const displayNotes = decodedNotes.notes || ""
+
     return (
         <div className="grid gap-4 md:grid-cols-2">
+            {/* Image display */}
+            {imageUrl ? (
+                <div className="md:col-span-2 flex justify-center">
+                    <div className="rounded-2xl border border-white/10 overflow-hidden bg-zinc-950/30 p-2">
+                        <img
+                            src={imageUrl}
+                            alt={sale.itemName || "Item"}
+                            className="max-h-48 rounded-xl object-contain"
+                        />
+                    </div>
+                </div>
+            ) : null}
+
             <div className="rounded-3xl border border-white/10 bg-white/5 p-5">
                 <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-300">Sale</div>
                 <Row label="Item" value={sale.itemName || sale.item?.name || "—"} />
@@ -1568,7 +1724,7 @@ function SaleDetail({ sale, currencyView, rates }) {
 
             <div className="rounded-3xl border border-white/10 bg-white/5 p-5 md:col-span-2">
                 <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-300">Notes</div>
-                <div className="text-sm text-zinc-200 whitespace-pre-wrap">{sale.notes || "—"}</div>
+                <div className="text-sm text-zinc-200 whitespace-pre-wrap">{displayNotes || "—"}</div>
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-white/5 p-5 md:col-span-2">
