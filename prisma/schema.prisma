@@ -60,6 +60,29 @@ enum SellingPlatform {
   OTHER
 }
 
+// ============================================
+// SUBSCRIPTION ENUMS (NEW)
+// ============================================
+
+enum SubscriptionStatus {
+  ACTIVE
+  INACTIVE
+  PAST_DUE
+  CANCELLED
+  TRIALING
+  TRIAL_EXPIRED
+}
+
+enum SubscriptionPlan {
+  TRIAL
+  MONTHLY
+  YEARLY
+}
+
+// ============================================
+// EXISTING MODELS
+// ============================================
+
 model Item {
   id        String   @id @default(cuid())
   userId    String
@@ -138,4 +161,48 @@ model Sale {
   @@index([userId])
   @@index([userId, soldAt])
   @@index([userId, itemId])
+}
+
+// ============================================
+// NEW SUBSCRIPTION MODELS
+// ============================================
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  userId               String             @unique
+  
+  stripeCustomerId     String             @unique
+  stripeSubscriptionId String?            @unique
+  stripePriceId        String?
+  
+  status               SubscriptionStatus @default(INACTIVE)
+  plan                 SubscriptionPlan   @default(TRIAL)
+  
+  trialStartDate       DateTime?
+  trialEndDate         DateTime?
+  trialUsed            Boolean            @default(false)
+  
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean            @default(false)
+  
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  
+  @@index([userId])
+  @@index([stripeCustomerId])
+  @@index([status])
+}
+
+model Payment {
+  id              String   @id @default(cuid())
+  userId          String
+  stripePaymentId String   @unique
+  amount          Int
+  currency        String   @default("gbp")
+  status          String
+  description     String?
+  createdAt       DateTime @default(now())
+  
+  @@index([userId])
 }

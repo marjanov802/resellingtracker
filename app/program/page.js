@@ -75,6 +75,30 @@ const decodeNotes = (notes) => {
     }
 }
 
+// Sale notes decoding (for sale status)
+const decodeSaleNotes = (notes) => {
+    const s = String(notes ?? "")
+    if (!s) return { notes: "", meta: {} }
+    try {
+        const o = JSON.parse(s)
+        if (o && typeof o === "object" && o._saleV === 1) {
+            return { notes: String(o.notes || ""), meta: o.meta && typeof o.meta === "object" ? o.meta : {} }
+        }
+        return { notes: s, meta: {} }
+    } catch {
+        return { notes: s, meta: {} }
+    }
+}
+
+// Helper to get sale status from a sale record
+const getSaleStatus = (sale) => {
+    if (sale?.saleStatus) return String(sale.saleStatus).toUpperCase()
+    if (sale?.status) return String(sale.status).toUpperCase()
+    const decoded = decodeSaleNotes(sale?.notes)
+    if (decoded?.meta?.saleStatus) return String(decoded.meta.saleStatus).toUpperCase()
+    return "COMPLETED"
+}
+
 function normaliseMeta(meta) {
     const m = meta && typeof meta === "object" ? meta : {}
     const currency = (m.currency || "GBP").toUpperCase()
@@ -662,6 +686,10 @@ export default function ProgramDashboard() {
         const fromMs = from.getTime()
         const toMs = to.getTime()
         return sales.filter((s) => {
+            // Exclude returned sales from all calculations
+            const saleStatus = getSaleStatus(s)
+            if (saleStatus === "RETURNED") return false
+
             const dt = s?.soldAt ? new Date(s.soldAt) : null
             if (!dt || Number.isNaN(dt.getTime())) return false
             const tms = dt.getTime()
@@ -710,11 +738,12 @@ export default function ProgramDashboard() {
         const toMs = to.getTime()
 
         const sorted = [...sales]
-            .map((s) => ({ s, t: s.soldAt ? new Date(s.soldAt).getTime() : 0 }))
-            .filter(({ t }) => t >= fromMs && t <= toMs)
+            .map((s) => ({ s, t: s.soldAt ? new Date(s.soldAt).getTime() : 0, status: getSaleStatus(s) }))
+            // Exclude returned sales from recent sales display
+            .filter(({ t, status }) => t >= fromMs && t <= toMs && status !== "RETURNED")
             .sort((a, b) => b.t - a.t)
             .slice(0, 6)
-            .map(({ s }) => {
+            .map(({ s, status }) => {
                 const cur = (s.currency || "GBP").toUpperCase()
                 const qty = Number(s.quantitySold || 0) || 0
                 const ppu = Number(s.salePricePerUnitPence || 0) || 0
@@ -745,6 +774,7 @@ export default function ProgramDashboard() {
                     netView,
                     profitView,
                     dateLabel,
+                    status,
                 }
             })
 
@@ -1277,7 +1307,12 @@ export default function ProgramDashboard() {
                                     <div key={sale.id} className="p-4 hover:bg-white/5 transition">
                                         <div className="flex items-start justify-between mb-2 gap-4">
                                             <div className="min-w-0">
-                                                <p className="text-white font-semibold truncate">{sale.item}</p>
+                                                <div className="flex items-center gap-2">
+                                                    <p className="text-white font-semibold truncate">{sale.item}</p>
+                                                    {sale.status === "PENDING" ? (
+                                                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-200 border border-amber-400/30">Pending</span>
+                                                    ) : null}
+                                                </div>
                                                 <p className="text-white/40 text-sm">
                                                     {sale.platform} • {sale.dateLabel}
                                                 </p>

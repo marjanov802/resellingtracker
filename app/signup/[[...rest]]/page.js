@@ -1,40 +1,42 @@
-// app/signup/[[...rest]]/page.js
+// app/signup/page.jsx
 "use client"
 
-import { SignUp } from "@clerk/nextjs"
-import AuthShell from "@/components/AuthShell"
+import { SignUp } from '@clerk/nextjs'
 
-const appearance = {
-    elements: {
-        rootBox: "w-full",
-        card: "bg-transparent shadow-none border-none p-0 w-full",
-        header: "hidden",
-        socialButtonsBlockButton:
-            "bg-white/5 border border-white/10 text-white hover:bg-white/10 transition rounded-2xl",
-        dividerLine: "bg-white/10",
-        dividerText: "text-white/60",
-        formFieldLabel: "text-white/70",
-        formFieldInput:
-            "bg-black/30 border border-white/10 text-white placeholder:text-white/35 focus:border-white/25 rounded-2xl h-11",
-        formButtonPrimary:
-            "bg-white text-black hover:bg-white/90 transition rounded-2xl h-11 font-semibold",
-        footerActionText: "text-white/60",
-        footerActionLink: "text-white hover:text-white/90",
-    },
-}
-
-export default function Page() {
+export default function SignUpPage() {
     return (
-        <AuthShell title="Create account" subtitle="Get started">
-            <SignUp
-                routing="path"
-                path="/signup"
-                signInUrl="/login"
-                appearance={appearance}
-                // ✅ force it (prevents dashboard/defaults overriding)
-                forceRedirectUrl="/program"
-                fallbackRedirectUrl="/program"
-            />
-        </AuthShell>
+        <main className="min-h-screen bg-black flex items-center justify-center">
+            {/* Background effects */}
+            <div className="fixed inset-0 pointer-events-none">
+                <div className="absolute -top-32 right-10 h-[440px] w-[440px] rounded-full bg-blue-500/14 blur-3xl" />
+                <div className="absolute bottom-10 left-10 h-[420px] w-[420px] rounded-full bg-purple-500/14 blur-3xl" />
+            </div>
+
+            <div className="relative">
+                <SignUp
+                    afterSignUpUrl="/onboarding"
+                    signInUrl="/login"
+                    appearance={{
+                        elements: {
+                            rootBox: "mx-auto",
+                            card: "bg-white/5 border border-white/10 backdrop-blur-xl shadow-[0_24px_80px_rgba(0,0,0,0.55)]",
+                            headerTitle: "text-white",
+                            headerSubtitle: "text-white/70",
+                            socialButtonsBlockButton: "bg-white/10 border-white/10 text-white hover:bg-white/15",
+                            socialButtonsBlockButtonText: "text-white",
+                            dividerLine: "bg-white/10",
+                            dividerText: "text-white/50",
+                            formFieldLabel: "text-white/70",
+                            formFieldInput: "bg-white/5 border-white/10 text-white placeholder:text-white/40",
+                            formButtonPrimary: "bg-white text-black hover:bg-white/90",
+                            footerActionLink: "text-white hover:text-white/80",
+                            footerActionText: "text-white/60",
+                            identityPreviewText: "text-white",
+                            identityPreviewEditButton: "text-white/70",
+                        }
+                    }}
+                />
+            </div>
+        </main>
     )
 }

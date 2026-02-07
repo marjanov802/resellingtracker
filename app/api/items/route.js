@@ -1,7 +1,7 @@
 // FILE: app/api/items/route.js
 import { NextResponse } from "next/server"
 import { currentUser } from "@clerk/nextjs/server"
-import { prisma } from "../../lib/prisma"
+import { prisma } from "../../../lib/prisma"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"

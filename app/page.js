@@ -2,7 +2,8 @@
 "use client"
 
 import Link from "next/link"
-import { useMemo, useState } from "react"
+import { useMemo, useState, useEffect } from "react"
+import { useUser, SignInButton } from '@clerk/nextjs'
 
 function Pill({ children }) {
   return (
@@ -57,7 +58,7 @@ function Feature({ title, desc, bullets }) {
   )
 }
 
-function PricingCard({ name, price, period, desc, bullets, popular, cta }) {
+function PricingCard({ name, price, period, desc, bullets, popular, cta, planId, badge, onSelect, loading, disabled, isSignedIn }) {
   return (
     <div
       className={[
@@ -71,6 +72,14 @@ function PricingCard({ name, price, period, desc, bullets, popular, cta }) {
         </div>
       ) : null}
 
+      {badge && (
+        <div className="absolute -top-3 right-7">
+          <span className="inline-flex items-center rounded-full bg-green-500/20 border border-green-500/30 px-3 py-1 text-xs text-green-300 font-medium">
+            {badge}
+          </span>
+        </div>
+      )}
+
       <div>
         <div className="text-lg font-semibold text-white">{name}</div>
         <div className="mt-1 text-sm text-white/70">{desc}</div>
@@ -81,15 +90,45 @@ function PricingCard({ name, price, period, desc, bullets, popular, cta }) {
         <div className="pb-1 text-sm text-white/70">{period}</div>
       </div>
 
-      <Link
-        href="/signup"
-        className={[
-          "mt-6 inline-flex w-full items-center justify-center rounded-2xl px-4 py-3 text-sm font-semibold transition",
-          popular ? "bg-white text-black hover:bg-white/90" : "bg-white/10 text-white hover:bg-white/15 border border-white/15",
-        ].join(" ")}
-      >
-        {cta}
-      </Link>
+      {isSignedIn ? (
+        <button
+          onClick={() => onSelect(planId)}
+          disabled={loading || disabled}
+          className={[
+            "mt-6 inline-flex w-full items-center justify-center rounded-2xl px-4 py-3 text-sm font-semibold transition",
+            loading || disabled
+              ? "bg-white/5 text-white/40 cursor-not-allowed"
+              : popular
+                ? "bg-white text-black hover:bg-white/90"
+                : "bg-white/10 text-white hover:bg-white/15 border border-white/15",
+          ].join(" ")}
+        >
+          {loading ? (
+            <span className="flex items-center gap-2">
+              <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Processing...
+            </span>
+          ) : disabled ? (
+            "Trial already used"
+          ) : (
+            cta
+          )}
+        </button>
+      ) : (
+        <SignInButton mode="modal" forceRedirectUrl="/#pricing">
+          <button
+            className={[
+              "mt-6 inline-flex w-full items-center justify-center rounded-2xl px-4 py-3 text-sm font-semibold transition",
+              popular ? "bg-white text-black hover:bg-white/90" : "bg-white/10 text-white hover:bg-white/15 border border-white/15",
+            ].join(" ")}
+          >
+            Sign in to {cta.toLowerCase()}
+          </button>
+        </SignInButton>
+      )}
 
       <ul className="mt-7 space-y-3 text-sm text-white/75">
         {bullets.map((b) => (
@@ -137,6 +176,58 @@ function FAQ({ q, a }) {
 }
 
 export default function Home() {
+  const { isSignedIn, isLoaded } = useUser()
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [canUseTrial, setCanUseTrial] = useState(true)
+
+  // Fetch subscription status when signed in
+  useEffect(() => {
+    async function fetchStatus() {
+      if (!isSignedIn) return
+
+      try {
+        const res = await fetch('/api/stripe/subscription-status')
+        if (res.ok) {
+          const data = await res.json()
+          setCanUseTrial(data.canUseTrial)
+        }
+      } catch (err) {
+        console.error('Failed to fetch subscription status:', err)
+      }
+    }
+
+    fetchStatus()
+  }, [isSignedIn])
+
+
+  // Handle plan selection and checkout
+  const handleSelectPlan = async (planId) => {
+    if (!isSignedIn) return
+
+    setLoading(true)
+    setError(null)
+
+    try {
+      const res = await fetch('/api/stripe/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan: planId }),
+      })
+
+      const data = await res.json()
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to create checkout session')
+      }
+
+      window.location.href = data.url
+    } catch (err) {
+      setError(err.message)
+      setLoading(false)
+    }
+  }
+
   const features = useMemo(
     () => [
       {
@@ -161,22 +252,35 @@ export default function Home() {
   const pricing = useMemo(
     () => [
       {
-        name: "Free",
-        price: "£0",
-        period: "/month",
-        desc: "For getting started and staying organised.",
-        bullets: ["Basic inventory tracking", "Profit per sale (manual fees)", "Limited analytics", "CSV export"],
+        planId: "TRIAL",
+        name: "Trial",
+        price: "£1",
+        period: "one-time",
+        desc: "Try the full platform for 14 days.",
+        bullets: ["Full access for 14 days", "All analytics features", "Inventory management", "CSV import/export"],
         popular: false,
-        cta: "Start free",
+        cta: "Start 14-day trial",
       },
       {
-        name: "Premium",
-        price: "£19",
+        planId: "MONTHLY",
+        name: "Monthly",
+        price: "£4.99",
         period: "/month",
-        desc: "For serious resellers who want insight and speed.",
-        bullets: ["Advanced analytics and trends", "Best and worst performers", "Sell-through and time-to-sell", "Stock alerts (coming soon)", "Priority support"],
+        desc: "Full access, cancel anytime.",
+        bullets: ["Full platform access", "Advanced analytics & trends", "Best/worst performers", "Stock alerts (coming soon)", "Priority support"],
         popular: true,
-        cta: "Start free trial",
+        cta: "Subscribe monthly",
+      },
+      {
+        planId: "YEARLY",
+        name: "Yearly",
+        price: "£50",
+        period: "/year",
+        desc: "Best value - save 17%.",
+        bullets: ["Full platform access", "Advanced analytics & trends", "Best/worst performers", "Stock alerts (coming soon)", "Priority support", "2 months free"],
+        popular: false,
+        cta: "Subscribe yearly",
+        badge: "Save 17%",
       },
     ],
     []
@@ -187,11 +291,21 @@ export default function Home() {
       { q: "What platforms does this support?", a: "You can track sales from any platform. Platform-specific automation can be added later, but the core tracking works for everything." },
       { q: "Does profit include fees and shipping?", a: "Yes. You can record fees, shipping, returns, and extra costs so true profit is accurate." },
       { q: "Can I import my spreadsheet?", a: "Yes. CSV import and export makes it easy to migrate and back up." },
-      { q: "Is there a free trial?", a: "Yes. Premium includes a free trial so you can test the analytics before paying." },
+      { q: "Is there a free trial?", a: "Yes. Try everything for £1 for 14 days before committing to a subscription." },
       { q: "Can I cancel anytime?", a: "Yes. You can cancel at any time." },
     ],
     []
   )
+
+  // Show loading state while Clerk loads
+  if (!isLoaded) {
+    return (
+      <main className="min-h-screen bg-black flex items-center justify-center">
+        <div className="animate-spin h-8 w-8 border-2 border-white/20 border-t-white rounded-full"></div>
+      </main>
+    )
+  }
+
 
   return (
     <main className="bg-black">
@@ -468,36 +582,37 @@ export default function Home() {
               Simple pricing
             </h2>
             <p className="mt-4 text-white/70 leading-relaxed">
-              Start free, then upgrade for deeper analytics and performance insights.
+              Try for £1, then subscribe for full access to all features.
             </p>
           </div>
 
-          <div className="mt-10 max-w-3xl mx-auto">
-            <div className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur px-5 py-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold text-white">Free trial on Premium</div>
-                <div className="text-sm text-white/70">Try Premium analytics before paying.</div>
+          {/* Error message */}
+          {error && (
+            <div className="mt-8 max-w-md mx-auto">
+              <div className="rounded-xl bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-200 text-center">
+                {error}
               </div>
-              <Link
-                href="/signup"
-                className="inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold text-black bg-white hover:bg-white/90 transition"
-              >
-                Start free trial →
-              </Link>
             </div>
-          </div>
+          )}
 
-          <div className="mt-10 grid lg:grid-cols-2 gap-6 items-stretch max-w-5xl mx-auto">
+          <div className="mt-10 grid lg:grid-cols-3 gap-6 items-start max-w-5xl mx-auto">
             {pricing.map((p) => (
-              <PricingCard key={p.name} {...p} />
+              <PricingCard
+                key={p.name}
+                {...p}
+                onSelect={handleSelectPlan}
+                loading={loading}
+                disabled={p.planId === 'TRIAL' && !canUseTrial}
+                isSignedIn={isSignedIn}
+              />
             ))}
           </div>
 
           <div className="mt-10 grid md:grid-cols-3 gap-6 max-w-5xl mx-auto">
             {[
               { t: "Cancel anytime", d: "Simple monthly plans with no lock-in." },
-              { t: "Data ownership", d: "CSV exports whenever you need them." },
-              { t: "Support", d: "Quick replies and product-led improvements." },
+              { t: "Secure payments", d: "Powered by Stripe. Card details never stored with us." },
+              { t: "14-day trial", d: "Try everything for just £1 before committing." },
             ].map((x) => (
               <div key={x.t} className="rounded-3xl border border-white/10 bg-white/5 backdrop-blur p-6">
                 <div className="text-sm font-semibold text-white">{x.t}</div>

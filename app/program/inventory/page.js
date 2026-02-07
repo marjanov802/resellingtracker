@@ -949,9 +949,10 @@ export default function InventoryPage() {
                 const sellGrossPence = sellQty * sellPricePerUnitPence
 
                 // 1. Create sale record
-                // Encode imageUrl into the notes field so it persists with the sale
+                // Encode imageUrl and status into the notes field so it persists with the sale
                 const saleNotesEncoded = encodeSaleNotes(entry.notes, {
-                    imageUrl: c?.meta?.imageUrl || null
+                    imageUrl: c?.meta?.imageUrl || null,
+                    saleStatus: "PENDING", // New sales start as pending
                 })
 
                 const salePayload = {

@@ -43,6 +43,19 @@ const PLATFORMS = [
     ["OTHER", "Other"],
 ]
 
+const SALE_STATUSES = [
+    ["ALL", "All"],
+    ["PENDING", "Pending"],
+    ["COMPLETED", "Completed"],
+    ["RETURNED", "Returned"],
+]
+
+const SALE_STATUS_META = {
+    PENDING: { label: "Pending", color: "bg-amber-500/20 text-amber-200 border-amber-400/30" },
+    COMPLETED: { label: "Completed", color: "bg-emerald-500/20 text-emerald-200 border-emerald-400/30" },
+    RETURNED: { label: "Returned", color: "bg-red-500/20 text-red-200 border-red-400/30" },
+}
+
 const fmt = (currency, minorUnits) => {
     const c = CURRENCY_META[(currency || "GBP").toUpperCase()] || CURRENCY_META.GBP
     const n = Number.isFinite(minorUnits) ? minorUnits : 0
@@ -131,6 +144,21 @@ const encodeSaleNotes = (plainNotes, meta) => {
         meta: meta && typeof meta === "object" ? meta : {},
     }
     return JSON.stringify(payload)
+}
+
+// Helper to get sale status from a sale record
+const getSaleStatus = (sale) => {
+    // Check top-level status first
+    if (sale?.saleStatus) return String(sale.saleStatus).toUpperCase()
+    if (sale?.status) return String(sale.status).toUpperCase()
+
+    // Check in decoded notes
+    const decoded = decodeSaleNotes(sale?.notes)
+    if (decoded?.meta?.saleStatus) return String(decoded.meta.saleStatus).toUpperCase()
+
+    // Default to PENDING for older sales without status (or COMPLETED if you prefer)
+    // Using COMPLETED as default so existing sales show as completed
+    return "COMPLETED"
 }
 
 function normaliseMeta(meta) {
@@ -459,6 +487,7 @@ export default function SalesPage() {
     })
 
     const [search, setSearch] = useState("")
+    const [statusFilter, setStatusFilter] = useState("ALL") // ALL|PENDING|COMPLETED|RETURNED
     const [period, setPeriod] = useState("week") // day|week|month|year|range
 
     // reference date for day/week/month/year views (lets you pick which week/month/year)
@@ -498,6 +527,9 @@ export default function SalesPage() {
         const now = new Date()
         return { from: toDateInput(now), to: toDateInput(now) }
     })
+
+    // Confirmation modal for return with restore
+    const [confirmModal, setConfirmModal] = useState({ open: false, action: null, message: "" })
 
     const anchorDate = useMemo(() => {
         const ymd = String(anchorDateYmd || "").trim()
@@ -653,6 +685,104 @@ export default function SalesPage() {
         }
     }
 
+    const updateSaleStatus = async (sale, newStatus, restoreToInventory = false) => {
+        try {
+            // Get existing decoded notes
+            const decoded = decodeSaleNotes(sale.notes)
+
+            // Update the status in meta
+            const updatedMeta = {
+                ...decoded.meta,
+                saleStatus: newStatus,
+            }
+
+            // Re-encode the notes
+            const updatedNotes = encodeSaleNotes(decoded.notes, updatedMeta)
+
+            // Update the sale via PATCH
+            const patchRes = await fetch(`/api/sales/${sale.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ notes: updatedNotes }),
+            })
+
+            if (!patchRes.ok) {
+                const errData = await patchRes.json().catch(() => null)
+                throw new Error(errData?.error || `Update failed (${patchRes.status})`)
+            }
+
+            // If returning and restoring to inventory
+            if (newStatus === "RETURNED" && restoreToInventory) {
+                const qty = Number(sale.quantitySold) || 1
+                const itemId = sale.itemId
+                const itemName = sale.itemName || "Returned Item"
+                const sku = sale.sku || sale.itemSku || null
+                const currency = (sale.currency || "GBP").toUpperCase()
+                const costPerUnit = Math.round((Number(sale.costTotalPence) || 0) / qty)
+                const imageUrl = getImageUrlForSale(sale, items)
+
+                // Check if item still exists in inventory
+                const existingItem = items.find(it => String(it.id) === String(itemId))
+
+                if (existingItem) {
+                    // Item exists, increment quantity
+                    const existingQty = Number(existingItem.quantity) || 0
+                    const decodedItem = decodeNotes(existingItem.notes)
+                    const meta = normaliseMeta(decodedItem.meta)
+
+                    const patched = {
+                        quantity: existingQty + qty,
+                        notes: encodeNotes(decodedItem.notes, { ...meta, status: "UNLISTED" }),
+                    }
+
+                    const itemPatchRes = await fetch(`/api/items/${itemId}`, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(patched),
+                    })
+
+                    if (!itemPatchRes.ok) {
+                        console.error("Failed to update existing item quantity")
+                    }
+                } else {
+                    // Item doesn't exist, create new
+                    const newItemNotes = encodeNotes("", {
+                        currency,
+                        status: "UNLISTED",
+                        purchaseTotalPence: costPerUnit,
+                        imageUrl: imageUrl || null,
+                    })
+
+                    const createItemRes = await fetch("/api/items", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            name: itemName,
+                            sku: sku,
+                            quantity: qty,
+                            notes: newItemNotes,
+                        }),
+                    })
+
+                    if (!createItemRes.ok) {
+                        console.error("Failed to create new inventory item")
+                    }
+                }
+
+                await loadItems()
+                showToast("ok", `Sale marked as returned & item restored to inventory`)
+            } else {
+                showToast("ok", `Sale marked as ${newStatus.toLowerCase()}`)
+            }
+
+            setDetailOpen(false)
+            setSelectedSale(null)
+            await loadSales()
+        } catch (e) {
+            showToast("error", e?.message || "Failed to update sale status")
+        }
+    }
+
     const submitSale = async (e) => {
         e?.preventDefault?.()
 
@@ -675,9 +805,10 @@ export default function SalesPage() {
 
         const saleCur = (c.itemCur || "GBP").toUpperCase()
 
-        // Encode imageUrl into the notes field so it persists with the sale
+        // Encode imageUrl and status into the notes field so it persists with the sale
         const saleNotesEncoded = encodeSaleNotes(sellForm.notes, {
-            imageUrl: c.meta.imageUrl || null
+            imageUrl: c.meta.imageUrl || null,
+            saleStatus: "PENDING", // New sales start as pending
         })
 
         const salePayload = {
@@ -762,18 +893,29 @@ export default function SalesPage() {
     }
 
     const filteredSales = useMemo(() => {
-        const q = String(search || "").trim().toLowerCase()
-        if (!q) return sales
+        let result = sales
 
-        return sales.filter((s) => {
-            const name = String(s.itemName || s.item?.name || "").toLowerCase()
-            const sku = String(s.sku || s.itemSku || "").toLowerCase()
-            const platform = String(s.platform || "").toLowerCase()
-            const notes = String(s.notes || "").toLowerCase()
-            const id = String(s.id || "").toLowerCase()
-            return name.includes(q) || sku.includes(q) || platform.includes(q) || notes.includes(q) || id.includes(q)
-        })
-    }, [sales, search])
+        // Filter by status first
+        if (statusFilter && statusFilter !== "ALL") {
+            result = result.filter((s) => getSaleStatus(s) === statusFilter)
+        }
+
+        // Then filter by search
+        const q = String(search || "").trim().toLowerCase()
+        if (q) {
+            result = result.filter((s) => {
+                const name = String(s.itemName || s.item?.name || "").toLowerCase()
+                const sku = String(s.sku || s.itemSku || "").toLowerCase()
+                const platform = String(s.platform || "").toLowerCase()
+                const decoded = decodeSaleNotes(s.notes)
+                const notesText = String(decoded.notes || "").toLowerCase()
+                const id = String(s.id || "").toLowerCase()
+                return name.includes(q) || sku.includes(q) || platform.includes(q) || notesText.includes(q) || id.includes(q)
+            })
+        }
+
+        return result
+    }, [sales, search, statusFilter])
 
     // keep selection stable: drop ids that no longer exist in filtered list after reload/search
     useEffect(() => {
@@ -811,6 +953,9 @@ export default function SalesPage() {
         let profit = 0
         let units = 0
         let rows = 0
+        let pendingCount = 0
+        let completedCount = 0
+        let returnedCount = 0
 
         const range = period === "range" ? parseDateInputToLocalRange(customRange.from, customRange.to) : { from: null, to: null }
 
@@ -824,6 +969,14 @@ export default function SalesPage() {
             } else {
                 if (!isSameBucket(soldAt, anchorDate, period)) continue
             }
+
+            const status = getSaleStatus(s)
+            if (status === "PENDING") pendingCount++
+            else if (status === "COMPLETED") completedCount++
+            else if (status === "RETURNED") returnedCount++
+
+            // Don't include RETURNED sales in revenue/profit calculations
+            if (status === "RETURNED") continue
 
             const cur = (s.currency || "GBP").toUpperCase()
             const qty = Number(s.quantitySold || 0) || 0
@@ -843,7 +996,7 @@ export default function SalesPage() {
         const avgSale = rows > 0 ? Math.round(revenue / rows) : 0
         const margin = revenue > 0 ? (profit / revenue) * 100 : 0
 
-        return { revenue, profit, units, rows, avgSale, margin }
+        return { revenue, profit, units, rows, avgSale, margin, pendingCount, completedCount, returnedCount }
     }, [filteredSales, period, anchorDate, customRange.from, customRange.to, currencyView, fx.rates])
 
     const allVisibleIds = useMemo(() => filteredSales.map((s) => String(s.id)).filter(Boolean), [filteredSales])
@@ -988,6 +1141,19 @@ export default function SalesPage() {
                             ) : null}
                         </div>
 
+                        <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2">
+                            <span className="text-xs text-zinc-400">Status:</span>
+                            <select
+                                value={statusFilter}
+                                onChange={(e) => setStatusFilter(e.target.value)}
+                                className="h-9 rounded-xl border border-white/10 bg-zinc-950/60 px-3 text-sm text-white outline-none focus:border-white/20"
+                            >
+                                {SALE_STATUSES.map(([val, label]) => (
+                                    <option key={val} value={val}>{label}</option>
+                                ))}
+                            </select>
+                        </div>
+
                         <button
                             type="button"
                             onClick={() => {
@@ -1103,6 +1269,22 @@ export default function SalesPage() {
                     </div>
                 </div>
 
+                {/* Status summary */}
+                <div className="mb-4 flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-2 rounded-xl border border-amber-400/20 bg-amber-500/10 px-3 py-2">
+                        <span className="text-xs text-amber-200">Pending:</span>
+                        <span className="text-sm font-semibold text-amber-100">{periodTotals.pendingCount}</span>
+                    </div>
+                    <div className="flex items-center gap-2 rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-3 py-2">
+                        <span className="text-xs text-emerald-200">Completed:</span>
+                        <span className="text-sm font-semibold text-emerald-100">{periodTotals.completedCount}</span>
+                    </div>
+                    <div className="flex items-center gap-2 rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-2">
+                        <span className="text-xs text-red-200">Returned:</span>
+                        <span className="text-sm font-semibold text-red-100">{periodTotals.returnedCount}</span>
+                    </div>
+                </div>
+
                 <div className="mb-6 grid gap-4 md:grid-cols-4">
                     <StatCard label={`Revenue (${currencyView})`} value={fmt(currencyView, periodTotals.revenue)} sub={`${periodTotals.rows} sale(s) this period`} />
                     <StatCard label={`Profit (${currencyView})`} value={fmt(currencyView, periodTotals.profit)} sub="Revenue − cost" />
@@ -1139,7 +1321,7 @@ export default function SalesPage() {
                     <div className="rounded-2xl border border-white/10 overflow-hidden">
                         <div
                             className={["grid border-b border-white/10", HEAD_H, HEADER_BG].join(" ")}
-                            style={{ gridTemplateColumns: "54px minmax(0,2fr) 120px 110px 150px 150px 150px 110px 60px" }}
+                            style={{ gridTemplateColumns: "54px minmax(0,2fr) 100px 100px 70px 130px 130px 130px 100px 60px" }}
                         >
                             <div className={["flex items-center justify-center text-xs font-semibold text-zinc-200"].join(" ")}>
                                 <button
@@ -1155,6 +1337,7 @@ export default function SalesPage() {
                                 </button>
                             </div>
                             <div className={["flex min-w-0 items-center text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}>Item</div>
+                            <div className={["flex min-w-0 items-center text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}>Status</div>
                             <div className={["flex min-w-0 items-center text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}>Platform</div>
                             <div className={["flex min-w-0 items-center text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}>Qty</div>
                             <div className={["flex min-w-0 items-center text-xs font-semibold text-zinc-200", CELL_PAD].join(" ")}>Sale / unit</div>
@@ -1191,11 +1374,15 @@ export default function SalesPage() {
                                 // Get image from items lookup
                                 const imageUrl = getImageUrlForSale(s, items)
 
+                                // Get sale status
+                                const saleStatus = getSaleStatus(s)
+                                const statusMeta = SALE_STATUS_META[saleStatus] || SALE_STATUS_META.COMPLETED
+
                                 return (
                                     <div
                                         key={s.id || `${s.itemId}-${idx}`}
                                         className={["grid cursor-pointer", ROW_H, rowBg, "hover:bg-white/5"].join(" ")}
-                                        style={{ gridTemplateColumns: "54px minmax(0,2fr) 120px 110px 150px 150px 150px 110px 60px" }}
+                                        style={{ gridTemplateColumns: "54px minmax(0,2fr) 100px 100px 70px 130px 130px 130px 100px 60px" }}
                                         onClick={() => openSaleDetail(s)}
                                     >
                                         <div className={["flex items-center justify-center", CELL_Y].join(" ")} onClick={(e) => e.stopPropagation()}>
@@ -1238,6 +1425,12 @@ export default function SalesPage() {
                                                     )}
                                                 </div>
                                             </div>
+                                        </div>
+
+                                        <div className={["flex min-w-0 items-center overflow-hidden", CELL_PAD, CELL_Y].join(" ")}>
+                                            <span className={["truncate text-[11px] font-semibold px-2 py-1 rounded-lg border", statusMeta.color].join(" ")}>
+                                                {statusMeta.label}
+                                            </span>
                                         </div>
 
                                         <div className={["flex min-w-0 items-center overflow-hidden", CELL_PAD, CELL_Y].join(" ")}>
@@ -1623,38 +1816,157 @@ export default function SalesPage() {
             ) : null}
 
             {/* SALE DETAIL MODAL */}
-            {detailOpen && selectedSale ? (
+            {detailOpen && selectedSale ? (() => {
+                const currentStatus = getSaleStatus(selectedSale)
+                const statusMeta = SALE_STATUS_META[currentStatus] || SALE_STATUS_META.COMPLETED
+
+                return (
+                    <Modal
+                        title="Sale details"
+                        onClose={() => {
+                            setDetailOpen(false)
+                            setSelectedSale(null)
+                        }}
+                        maxWidth="max-w-4xl"
+                        footer={
+                            <div className="flex flex-col gap-3">
+                                {/* Status info */}
+                                <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-zinc-950/30 p-3">
+                                    <span className="text-xs text-zinc-400">Current status:</span>
+                                    <span className={["text-xs font-semibold px-3 py-1 rounded-lg border", statusMeta.color].join(" ")}>
+                                        {statusMeta.label}
+                                    </span>
+                                </div>
+
+                                {/* Status action buttons */}
+                                {currentStatus === "PENDING" ? (
+                                    <div className="flex flex-wrap gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => updateSaleStatus(selectedSale, "COMPLETED")}
+                                            className="h-11 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-5 text-sm font-semibold text-emerald-100 hover:bg-emerald-500/15"
+                                        >
+                                            ✓ Mark as Completed
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setConfirmModal({
+                                                open: true,
+                                                message: "Mark as returned and restore item to inventory?",
+                                                action: () => updateSaleStatus(selectedSale, "RETURNED", true)
+                                            })}
+                                            className="h-11 rounded-2xl border border-amber-400/20 bg-amber-500/10 px-5 text-sm font-semibold text-amber-100 hover:bg-amber-500/15"
+                                        >
+                                            ↩ Mark as Returned (restore to inventory)
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => updateSaleStatus(selectedSale, "RETURNED", false)}
+                                            className="h-11 rounded-2xl border border-red-400/20 bg-red-500/10 px-5 text-sm font-semibold text-red-100 hover:bg-red-500/15"
+                                        >
+                                            ✗ Mark as Returned (no restore)
+                                        </button>
+                                    </div>
+                                ) : currentStatus === "COMPLETED" ? (
+                                    <div className="flex flex-wrap gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => updateSaleStatus(selectedSale, "PENDING")}
+                                            className="h-11 rounded-2xl border border-amber-400/20 bg-amber-500/10 px-5 text-sm font-semibold text-amber-100 hover:bg-amber-500/15"
+                                        >
+                                            ⏳ Revert to Pending
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setConfirmModal({
+                                                open: true,
+                                                message: "Mark as returned and restore item to inventory?",
+                                                action: () => updateSaleStatus(selectedSale, "RETURNED", true)
+                                            })}
+                                            className="h-11 rounded-2xl border border-red-400/20 bg-red-500/10 px-5 text-sm font-semibold text-red-100 hover:bg-red-500/15"
+                                        >
+                                            ↩ Mark as Returned (restore to inventory)
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-wrap gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => updateSaleStatus(selectedSale, "PENDING")}
+                                            className="h-11 rounded-2xl border border-amber-400/20 bg-amber-500/10 px-5 text-sm font-semibold text-amber-100 hover:bg-amber-500/15"
+                                        >
+                                            ⏳ Revert to Pending
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => updateSaleStatus(selectedSale, "COMPLETED")}
+                                            className="h-11 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-5 text-sm font-semibold text-emerald-100 hover:bg-emerald-500/15"
+                                        >
+                                            ✓ Mark as Completed
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* Delete and Close buttons */}
+                                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between border-t border-white/10 pt-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => deleteSale(selectedSale.id)}
+                                        className="h-11 rounded-2xl border border-red-400/20 bg-red-500/10 px-5 text-sm font-semibold text-red-100 hover:bg-red-500/15"
+                                    >
+                                        Delete sale
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setDetailOpen(false)
+                                            setSelectedSale(null)
+                                        }}
+                                        className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
+                                    >
+                                        Close
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    >
+                        <SaleDetail sale={selectedSale} currencyView={currencyView} rates={fx.rates} items={items} />
+                    </Modal>
+                )
+            })() : null}
+
+            {/* CONFIRMATION MODAL */}
+            {confirmModal.open ? (
                 <Modal
-                    title="Sale details"
-                    onClose={() => {
-                        setDetailOpen(false)
-                        setSelectedSale(null)
-                    }}
-                    maxWidth="max-w-4xl"
+                    title="Confirm action"
+                    onClose={() => setConfirmModal({ open: false, action: null, message: "" })}
+                    maxWidth="max-w-md"
                     footer={
-                        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+                        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                             <button
                                 type="button"
-                                onClick={() => deleteSale(selectedSale.id)}
-                                className="h-11 rounded-2xl border border-red-400/20 bg-red-500/10 px-5 text-sm font-semibold text-red-100 hover:bg-red-500/15"
+                                onClick={() => setConfirmModal({ open: false, action: null, message: "" })}
+                                className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
                             >
-                                Delete sale
+                                Cancel
                             </button>
-
                             <button
                                 type="button"
                                 onClick={() => {
-                                    setDetailOpen(false)
-                                    setSelectedSale(null)
+                                    if (confirmModal.action) confirmModal.action()
+                                    setConfirmModal({ open: false, action: null, message: "" })
                                 }}
-                                className="h-11 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm font-semibold text-white/90 hover:bg-white/10"
+                                className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-zinc-950 hover:bg-zinc-100"
                             >
-                                Close
+                                Confirm
                             </button>
                         </div>
                     }
                 >
-                    <SaleDetail sale={selectedSale} currencyView={currencyView} rates={fx.rates} items={items} />
+                    <div className="py-4 text-center">
+                        <div className="text-sm text-zinc-200">{confirmModal.message}</div>
+                    </div>
                 </Modal>
             ) : null}
         </div>
@@ -1682,6 +1994,10 @@ function SaleDetail({ sale, currencyView, rates, items }) {
     const decodedNotes = decodeSaleNotes(sale.notes)
     const displayNotes = decodedNotes.notes || ""
 
+    // Get sale status
+    const saleStatus = getSaleStatus(sale)
+    const statusMeta = SALE_STATUS_META[saleStatus] || SALE_STATUS_META.COMPLETED
+
     return (
         <div className="grid gap-4 md:grid-cols-2">
             {/* Image display */}
@@ -1699,6 +2015,11 @@ function SaleDetail({ sale, currencyView, rates, items }) {
 
             <div className="rounded-3xl border border-white/10 bg-white/5 p-5">
                 <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-300">Sale</div>
+                <Row label="Status" value={
+                    <span className={["text-xs font-semibold px-3 py-1 rounded-lg border", statusMeta.color].join(" ")}>
+                        {statusMeta.label}
+                    </span>
+                } />
                 <Row label="Item" value={sale.itemName || sale.item?.name || "—"} />
                 <Row label="SKU" value={sale.sku || sale.itemSku || "—"} />
                 <Row label="Platform" value={String(sale.platform || "—").toUpperCase()} />
