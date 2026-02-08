@@ -1,7 +1,6 @@
-const config = {
-  plugins: {
-    "@tailwindcss/postcss": {},
-  },
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  skipTrailingSlashRedirect: true,
 };
 
-export default config;
+export default nextConfig;
