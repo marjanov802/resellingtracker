@@ -72,7 +72,7 @@ export async function POST(request) {
 }
 
 // ============================================
-// CHECKOUT COMPLETED - Handles BOTH trial AND subscription
+// CHECKOUT COMPLETED - Main handler
 // ============================================
 async function handleCheckoutCompleted(session) {
   const { userId, plan, trialEndDate } = session.metadata || {};
@@ -109,7 +109,6 @@ async function handleCheckoutCompleted(session) {
       },
     });
 
-    // Record payment
     if (session.payment_intent) {
       try {
         await prisma.payment.create({
@@ -131,11 +130,10 @@ async function handleCheckoutCompleted(session) {
     return;
   }
 
-  // SUBSCRIPTION (monthly/yearly) - THIS WAS MISSING!
+  // SUBSCRIPTION (monthly/yearly)
   if (session.mode === 'subscription') {
     const subscriptionPlan = plan === 'YEARLY' ? 'YEARLY' : 'MONTHLY';
 
-    // Set period dates
     const now = new Date();
     const periodEnd = new Date(now);
     if (subscriptionPlan === 'YEARLY') {
@@ -167,29 +165,60 @@ async function handleCheckoutCompleted(session) {
       },
     });
 
-    console.log(`[Webhook] Subscription created for ${userId} - Plan: ${subscriptionPlan}`);
+    console.log(`[Webhook] Subscription ACTIVE for ${userId} - Plan: ${subscriptionPlan}`);
   }
 }
 
 // ============================================
-// SUBSCRIPTION UPDATE - Updates existing record
+// SUBSCRIPTION UPDATE - Only update if beneficial
 // ============================================
 async function handleSubscriptionUpdate(subscription) {
   const customerId = subscription.customer;
 
-  console.log(`[Webhook] Subscription update - Customer: ${customerId}, Status: ${subscription.status}`);
+  console.log(`[Webhook] Subscription update - Customer: ${customerId}, Stripe Status: ${subscription.status}`);
 
-  // Find existing subscription by customer ID
   const existing = await prisma.subscription.findFirst({
     where: { stripeCustomerId: customerId },
   });
 
   if (!existing) {
-    console.log(`[Webhook] No subscription found for customer ${customerId}, skipping update`);
+    console.log(`[Webhook] No subscription found for customer ${customerId}, skipping`);
     return;
   }
 
-  // Determine plan from price ID
+  // If already ACTIVE, don't downgrade to other statuses from race conditions
+  if (existing.status === 'ACTIVE' && subscription.status === 'active') {
+    console.log(`[Webhook] Subscription already ACTIVE, updating details only`);
+  }
+
+  // Map Stripe status - be careful with the mapping
+  const statusMap = {
+    active: 'ACTIVE',
+    past_due: 'PAST_DUE',
+    canceled: 'CANCELLED',
+    cancelled: 'CANCELLED',
+    unpaid: 'PAST_DUE',
+    trialing: 'TRIALING',
+    incomplete: 'ACTIVE', // Changed: treat incomplete as active since payment succeeded
+    incomplete_expired: 'INACTIVE',
+    paused: 'INACTIVE',
+  };
+
+  // Only change status if Stripe says it's active, or if it's a downgrade event
+  let newStatus = statusMap[subscription.status];
+
+  // If existing is ACTIVE and new would be worse, keep ACTIVE
+  // (handles race condition where subscription.created comes after checkout.completed)
+  if (existing.status === 'ACTIVE' && !['active', 'past_due', 'canceled', 'cancelled', 'unpaid'].includes(subscription.status)) {
+    newStatus = 'ACTIVE';
+    console.log(`[Webhook] Keeping ACTIVE status despite Stripe status: ${subscription.status}`);
+  }
+
+  // If we couldn't map the status, keep existing
+  if (!newStatus) {
+    newStatus = existing.status;
+  }
+
   const priceId = subscription.items?.data?.[0]?.price?.id;
   let plan = existing.plan;
   if (priceId === PLANS.YEARLY.priceId) {
@@ -198,28 +227,14 @@ async function handleSubscriptionUpdate(subscription) {
     plan = 'MONTHLY';
   }
 
-  // Map Stripe status
-  const statusMap = {
-    active: 'ACTIVE',
-    past_due: 'PAST_DUE',
-    canceled: 'CANCELLED',
-    unpaid: 'PAST_DUE',
-    trialing: 'TRIALING',
-    incomplete: 'INACTIVE',
-    incomplete_expired: 'INACTIVE',
-  };
-  const status = statusMap[subscription.status] || existing.status;
-
-  // Build update data
   const updateData = {
     stripeSubscriptionId: subscription.id,
     stripePriceId: priceId || existing.stripePriceId,
-    status,
+    status: newStatus,
     plan,
     cancelAtPeriodEnd: subscription.cancel_at_period_end || false,
   };
 
-  // Only update dates if valid
   if (subscription.current_period_start && typeof subscription.current_period_start === 'number') {
     updateData.currentPeriodStart = new Date(subscription.current_period_start * 1000);
   }
@@ -232,7 +247,7 @@ async function handleSubscriptionUpdate(subscription) {
     data: updateData,
   });
 
-  console.log(`[Webhook] Updated subscription for ${existing.userId} - Status: ${status}`);
+  console.log(`[Webhook] Updated subscription for ${existing.userId} - Status: ${newStatus}`);
 }
 
 // ============================================
@@ -266,7 +281,15 @@ async function handlePaymentSucceeded(invoice) {
 
   if (!existing) return;
 
-  // Record payment
+  // Make sure status is ACTIVE after successful payment
+  if (existing.status !== 'ACTIVE' && existing.status !== 'TRIALING') {
+    await prisma.subscription.update({
+      where: { id: existing.id },
+      data: { status: 'ACTIVE' },
+    });
+    console.log(`[Webhook] Set subscription to ACTIVE after payment for ${existing.userId}`);
+  }
+
   if (invoice.payment_intent) {
     try {
       await prisma.payment.create({
@@ -282,14 +305,6 @@ async function handlePaymentSucceeded(invoice) {
     } catch (e) {
       // Payment may already exist
     }
-  }
-
-  // Ensure active status
-  if (existing.status === 'PAST_DUE') {
-    await prisma.subscription.update({
-      where: { id: existing.id },
-      data: { status: 'ACTIVE' },
-    });
   }
 
   console.log(`[Webhook] Invoice paid for ${existing.userId}`);
