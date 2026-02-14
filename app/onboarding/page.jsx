@@ -4,56 +4,57 @@
 import { useState, useEffect } from 'react'
 import { useUser, useClerk } from '@clerk/nextjs'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
 
 function PricingCard({ name, price, period, desc, bullets, popular, cta, planId, badge, onSelect, loading }) {
     return (
         <div
             className={[
-                "relative rounded-3xl border p-7 backdrop-blur-xl",
-                popular ? "border-white/20 bg-white/10 shadow-[0_24px_80px_rgba(0,0,0,0.55)]" : "border-white/10 bg-white/5",
+                "relative rounded-2xl border p-6",
+                popular
+                    ? "border-white/20 bg-[#161616]"
+                    : "border-[#222] bg-[#111]",
             ].join(" ")}
         >
             {popular && (
-                <div className="absolute -top-3 left-7">
-                    <span className="inline-flex items-center rounded-full border border-white/12 bg-white/5 px-3 py-1 text-xs text-white/75">
+                <div className="absolute -top-3 left-6">
+                    <span className="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-medium text-black">
                         Most popular
                     </span>
                 </div>
             )}
 
             {badge && (
-                <div className="absolute -top-3 right-7">
-                    <span className="inline-flex items-center rounded-full bg-green-500/20 border border-green-500/30 px-3 py-1 text-xs text-green-300 font-medium">
+                <div className="absolute -top-3 right-6">
+                    <span className="inline-flex items-center rounded-full bg-green-500/20 border border-green-500/30 px-3 py-1 text-xs text-green-400 font-medium">
                         {badge}
                     </span>
                 </div>
             )}
 
-            <div>
+            <div className="mt-2">
                 <div className="text-lg font-semibold text-white">{name}</div>
-                <div className="mt-1 text-sm text-white/70">{desc}</div>
+                <div className="mt-1 text-sm text-neutral-400">{desc}</div>
             </div>
 
-            <div className="mt-6 flex items-end gap-2">
-                <div className="text-4xl font-bold text-white tracking-tight">{price}</div>
-                <div className="pb-1 text-sm text-white/70">{period}</div>
+            <div className="mt-5 flex items-baseline gap-1">
+                <span className="text-3xl font-bold text-white">{price}</span>
+                <span className="text-sm text-neutral-500">{period}</span>
             </div>
 
             <button
                 onClick={() => onSelect(planId)}
                 disabled={loading}
                 className={[
-                    "mt-6 inline-flex w-full items-center justify-center rounded-2xl px-4 py-3 text-sm font-semibold transition",
+                    "mt-5 w-full rounded-lg px-4 py-2.5 text-sm font-medium transition",
                     loading
-                        ? "bg-white/5 text-white/40 cursor-not-allowed"
+                        ? "bg-neutral-800 text-neutral-500 cursor-not-allowed"
                         : popular
-                            ? "bg-white text-black hover:bg-white/90"
-                            : "bg-white/10 text-white hover:bg-white/15 border border-white/15",
+                            ? "bg-white text-black hover:bg-neutral-200"
+                            : "bg-[#222] text-white hover:bg-[#2a2a2a] border border-[#333]",
                 ].join(" ")}
             >
                 {loading ? (
-                    <span className="flex items-center gap-2">
+                    <span className="flex items-center justify-center gap-2">
                         <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -65,15 +66,13 @@ function PricingCard({ name, price, period, desc, bullets, popular, cta, planId,
                 )}
             </button>
 
-            <ul className="mt-7 space-y-3 text-sm text-white/75">
+            <ul className="mt-5 space-y-2.5">
                 {bullets.map((b) => (
-                    <li key={b} className="flex items-start gap-2">
-                        <span className="mt-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/10 border border-white/10">
-                            <svg className="h-3.5 w-3.5 text-white" viewBox="0 0 24 24" fill="none">
-                                <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                        </span>
-                        <span>{b}</span>
+                    <li key={b} className="flex items-center gap-2 text-sm text-neutral-400">
+                        <svg className="h-4 w-4 text-green-500 flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                            <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        {b}
                     </li>
                 ))}
             </ul>
@@ -98,7 +97,7 @@ const PRICING_PLANS = [
         price: "£4.99",
         period: "/month",
         desc: "Full access, cancel anytime.",
-        bullets: ["Full platform access", "Advanced analytics & trends", "Best/worst performers", "Stock alerts (coming soon)", "Priority support"],
+        bullets: ["Full platform access", "Advanced analytics", "Best/worst performers", "Priority support"],
         popular: true,
         cta: "Subscribe monthly",
     },
@@ -108,7 +107,7 @@ const PRICING_PLANS = [
         price: "£50",
         period: "/year",
         desc: "Best value - save 17%.",
-        bullets: ["Full platform access", "Advanced analytics & trends", "Best/worst performers", "Stock alerts (coming soon)", "Priority support", "2 months free"],
+        bullets: ["Everything in Monthly", "2 months free", "Priority support"],
         popular: false,
         cta: "Subscribe yearly",
         badge: "Save 17%",
@@ -124,7 +123,6 @@ export default function OnboardingPage() {
     const [error, setError] = useState(null)
     const [checkingSubscription, setCheckingSubscription] = useState(true)
 
-    // Check if user already has subscription
     useEffect(() => {
         async function checkExistingSubscription() {
             if (!isSignedIn) {
@@ -153,7 +151,6 @@ export default function OnboardingPage() {
         }
     }, [isSignedIn, isLoaded, router])
 
-    // Handle plan selection
     const handleSelectPlan = async (planId) => {
         setLoading(true)
         setError(null)
@@ -178,143 +175,76 @@ export default function OnboardingPage() {
         }
     }
 
-    // Handle cancel/exit
     const handleCancel = async () => {
         await signOut()
         router.push('/')
     }
 
-    // Show loading while Clerk loads or checking subscription
     if (!isLoaded || checkingSubscription) {
         return (
-            <main className="min-h-screen bg-black flex items-center justify-center">
+            <main className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
                 <div className="text-center">
-                    <div className="animate-spin h-8 w-8 border-2 border-white/20 border-t-white rounded-full mx-auto"></div>
-                    <p className="mt-4 text-white/60 text-sm">Setting up your account...</p>
+                    <div className="animate-spin h-8 w-8 border-2 border-neutral-700 border-t-white rounded-full mx-auto"></div>
+                    <p className="mt-4 text-neutral-500 text-sm">Loading...</p>
                 </div>
             </main>
         )
     }
 
-    // Redirect to signup if not signed in
     if (!isSignedIn) {
         router.push('/signup')
         return null
     }
 
     return (
-        <main className="min-h-screen bg-black">
-            {/* Background effects */}
-            <div className="fixed inset-0 pointer-events-none">
-                <div className="absolute -top-32 right-10 h-[440px] w-[440px] rounded-full bg-blue-500/14 blur-3xl" />
-                <div className="absolute bottom-10 left-10 h-[420px] w-[420px] rounded-full bg-purple-500/14 blur-3xl" />
-            </div>
+        <main className="min-h-screen bg-[#0a0a0a]">
+            {/* Content */}
+            <div className="max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20">
+                {/* Header */}
+                <div className="text-center max-w-xl mx-auto">
+                    <h1 className="text-2xl sm:text-3xl font-bold text-white">
+                        Choose your plan
+                    </h1>
+                    <p className="mt-2 text-neutral-400">
+                        {user?.firstName ? `Welcome, ${user.firstName}! ` : ''}Select a plan to get started.
+                    </p>
+                </div>
 
-            <div className="relative">
-                {/* Minimal Header */}
-                <header className="py-6 px-4 sm:px-6">
-                    <div className="max-w-7xl mx-auto flex items-center justify-between">
-                        <Link href="/" className="text-lg font-semibold text-white">
-                            ResellTracker
-                        </Link>
-
-                        <button
-                            onClick={handleCancel}
-                            className="inline-flex items-center gap-2 text-sm text-white/50 hover:text-white transition px-3 py-2 rounded-lg hover:bg-white/5"
-                        >
-                            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                            Cancel
-                        </button>
-                    </div>
-                </header>
-
-                {/* Content */}
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
-                    {/* Progress Steps */}
-                    <div className="flex items-center justify-center gap-3 text-sm mb-12">
-                        <div className="flex items-center gap-2">
-                            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-green-500/20 border border-green-500/40 text-green-400 text-xs">
-                                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                                    <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
-                                </svg>
-                            </span>
-                            <span className="text-green-400 font-medium">Account created</span>
-                        </div>
-
-                        <div className="w-8 h-px bg-white/20"></div>
-
-                        <div className="flex items-center gap-2">
-                            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white/10 border border-white/30 text-white text-xs font-semibold">
-                                2
-                            </span>
-                            <span className="text-white font-medium">Choose plan</span>
-                        </div>
-
-                        <div className="w-8 h-px bg-white/10"></div>
-
-                        <div className="flex items-center gap-2">
-                            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white/5 border border-white/10 text-white/40 text-xs">
-                                3
-                            </span>
-                            <span className="text-white/40">Start tracking</span>
+                {/* Error */}
+                {error && (
+                    <div className="mt-6 max-w-md mx-auto">
+                        <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-400 text-center">
+                            {error}
                         </div>
                     </div>
+                )}
 
-                    {/* Welcome message */}
-                    <div className="text-center max-w-2xl mx-auto mb-10">
-                        <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-white">
-                            Welcome{user?.firstName ? `, ${user.firstName}` : ''}! 👋
-                        </h1>
-                        <p className="mt-4 text-white/60 leading-relaxed">
-                            One last step — choose a plan to start tracking your reselling business.
-                        </p>
+                {/* Pricing cards */}
+                <div className="mt-10 grid md:grid-cols-3 gap-5 max-w-4xl mx-auto">
+                    {PRICING_PLANS.map((plan) => (
+                        <PricingCard
+                            key={plan.name}
+                            {...plan}
+                            onSelect={handleSelectPlan}
+                            loading={loading}
+                        />
+                    ))}
+                </div>
+
+                {/* Footer */}
+                <div className="mt-12 flex flex-col items-center gap-6">
+                    <div className="flex items-center justify-center gap-6 text-xs text-neutral-500">
+                        <span>🔒 Secure payment</span>
+                        <span>↩️ Cancel anytime</span>
+                        <span>⚡ Instant access</span>
                     </div>
 
-                    {/* Error message */}
-                    {error && (
-                        <div className="mb-8 max-w-md mx-auto">
-                            <div className="rounded-xl bg-red-500/10 border border-red-500/20 px-4 py-3 text-sm text-red-200 text-center">
-                                {error}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Pricing cards */}
-                    <div className="grid lg:grid-cols-3 gap-6 items-start max-w-5xl mx-auto">
-                        {PRICING_PLANS.map((plan) => (
-                            <PricingCard
-                                key={plan.name}
-                                {...plan}
-                                onSelect={handleSelectPlan}
-                                loading={loading}
-                            />
-                        ))}
-                    </div>
-
-                    {/* Trust badges */}
-                    <div className="mt-14 flex flex-wrap items-center justify-center gap-6 text-sm text-white/50">
-                        <div className="flex items-center gap-2">
-                            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                            Secure payments via Stripe
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path d="M9 12l2 2 4-4" strokeLinecap="round" strokeLinejoin="round" />
-                                <circle cx="12" cy="12" r="10" />
-                            </svg>
-                            Cancel anytime
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
-                            Instant access
-                        </div>
-                    </div>
+                    <button
+                        onClick={handleCancel}
+                        className="text-sm text-neutral-500 hover:text-white transition"
+                    >
+                        Cancel and sign out
+                    </button>
                 </div>
             </div>
         </main>

@@ -53,7 +53,8 @@ const PLATFORMS = [
 const CATEGORIES = ["Clothes", "Shoes", "Tech", "Collectables", "Cards", "Watches", "Bags", "Jewellery", "Home", "Other"]
 
 const CONDITIONS = ["New", "New (with tags)", "Like new", "Good", "Fair", "Poor"]
-
+const CLOTHING_SIZES = ["XXS", "XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL"]
+const SHOE_SIZES = ["3", "3.5", "4", "4.5", "5", "5.5", "6", "6.5", "7", "7.5", "8", "8.5", "9", "9.5", "10", "10.5", "11", "11.5", "12", "12.5", "13", "14", "15"]
 const fmt = (currency, minorUnits) => {
     const c = CURRENCY_META[currency] || CURRENCY_META.GBP
     const n = Number.isFinite(minorUnits) ? minorUnits : 0
@@ -136,6 +137,7 @@ function normaliseMeta(meta) {
     const category = m.category || null
     const condition = m.condition || null
     const imageUrl = m.imageUrl || null
+    const size = m.size || null
 
     const purchaseTotalPence = Number(m.purchaseTotalPence) || 0
     const estimatedSalePence = m.estimatedSalePence == null ? null : Number(m.estimatedSalePence)
@@ -168,6 +170,7 @@ function normaliseMeta(meta) {
         category,
         condition,
         imageUrl,
+        size,
         purchaseTotalPence,
         estimatedSalePence: estimatedFromLegacy,
         listings,
@@ -615,6 +618,7 @@ export default function InventoryPage() {
         category: "Clothes",
         condition: "Good",
         status: "UNLISTED",
+        size: "",
 
         purchaseTotal: "0.00",
         estimatedSale: "0.00",
@@ -674,6 +678,10 @@ export default function InventoryPage() {
         category: "Clothes",
         condition: "Good",
         status: "UNLISTED",
+        category: "Clothes",
+        condition: "Good",
+        status: "UNLISTED",
+        size: "",
 
         purchaseTotal: "0.00",
         estimatedSale: "0.00",
@@ -1411,6 +1419,9 @@ export default function InventoryPage() {
         const name = String(addForm.title || "").trim()
         if (!name) return showToast("error", "Title is required")
 
+        if ((addForm.category === "Clothes" || addForm.category === "Shoes") && !addForm.size) {
+            return showToast("error", "Size is required for clothing and shoes")
+        }
         const status = (addForm.status || "UNLISTED").toUpperCase()
 
         const purchaseTotalPence = parseMoneyToPence(addForm.purchaseTotal)
@@ -1430,7 +1441,7 @@ export default function InventoryPage() {
             category: addForm.category || null,
             condition: addForm.condition || null,
             imageUrl: addForm.imageUrl || null,
-
+            size: (addForm.category === "Clothes" || addForm.category === "Shoes") ? (addForm.size || null) : null,
             purchaseTotalPence,
             estimatedSalePence,
 
@@ -1483,7 +1494,7 @@ export default function InventoryPage() {
             category: meta.category || "Clothes",
             condition: meta.condition || "Good",
             status: (meta.status || "UNLISTED").toUpperCase(),
-
+            size: meta.size || "",
             purchaseTotal: ((Number(meta.purchaseTotalPence || it.costPence || 0) || 0) / 100).toFixed(2),
             estimatedSale: meta.estimatedSalePence == null ? "0.00" : ((Number(meta.estimatedSalePence) || 0) / 100).toFixed(2),
 
@@ -1532,7 +1543,9 @@ export default function InventoryPage() {
 
         const name = String(editForm.title || "").trim()
         if (!name) return showToast("error", "Title is required")
-
+        if ((editForm.category === "Clothes" || editForm.category === "Shoes") && !editForm.size) {
+            return showToast("error", "Size is required for clothing and shoes")
+        }
         const status = (editForm.status || "UNLISTED").toUpperCase()
 
         const purchaseTotalPence = parseMoneyToPence(editForm.purchaseTotal)
@@ -1552,7 +1565,7 @@ export default function InventoryPage() {
             category: editForm.category || null,
             condition: editForm.condition || null,
             imageUrl: editForm.imageUrl || null,
-
+            size: (editForm.category === "Clothes" || editForm.category === "Shoes") ? (editForm.size || null) : null,
             purchaseTotalPence,
             estimatedSalePence,
 
@@ -2288,6 +2301,35 @@ export default function InventoryPage() {
                                     ))}
                                 </select>
                             </Field>
+                            {(addForm.category === "Clothes" || addForm.category === "Shoes") && (
+                                <Field label="Size *">
+                                    <select
+                                        value={addForm.size}
+                                        onChange={(e) => onAddChange({ size: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    >
+                                        <option value="">Select size</option>
+                                        {(addForm.category === "Shoes" ? SHOE_SIZES : CLOTHING_SIZES).map((s) => (
+                                            <option key={s} value={s}>{s}</option>
+                                        ))}
+                                    </select>
+                                </Field>
+                            )}
+
+                            {(addForm.category === "Clothes" || addForm.category === "Shoes") && (
+                                <Field label="Size *">
+                                    <select
+                                        value={addForm.size}
+                                        onChange={(e) => onAddChange({ size: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    >
+                                        <option value="">Select size</option>
+                                        {(addForm.category === "Shoes" ? SHOE_SIZES : CLOTHING_SIZES).map((s) => (
+                                            <option key={s} value={s}>{s}</option>
+                                        ))}
+                                    </select>
+                                </Field>
+                            )}
 
                             <Field label="Condition">
                                 <select value={addForm.condition} onChange={(e) => onAddChange({ condition: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
@@ -2485,9 +2527,38 @@ export default function InventoryPage() {
                                     ))}
                                 </select>
                             </Field>
+                            {(editForm.category === "Clothes" || editForm.category === "Shoes") && (
+                                <Field label="Size *">
+                                    <select
+                                        value={editForm.size}
+                                        onChange={(e) => onEditChange({ size: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    >
+                                        <option value="">Select size</option>
+                                        {(editForm.category === "Shoes" ? SHOE_SIZES : CLOTHING_SIZES).map((s) => (
+                                            <option key={s} value={s}>{s}</option>
+                                        ))}
+                                    </select>
+                                </Field>
+                            )}
+
+                            {(addForm.category === "Clothes" || addForm.category === "Shoes") && (
+                                <Field label="Size *">
+                                    <select
+                                        value={addForm.size}
+                                        onChange={(e) => onAddChange({ size: e.target.value })}
+                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
+                                    >
+                                        <option value="">Select size</option>
+                                        {(addForm.category === "Shoes" ? SHOE_SIZES : CLOTHING_SIZES).map((s) => (
+                                            <option key={s} value={s}>{s}</option>
+                                        ))}
+                                    </select>
+                                </Field>
+                            )}
 
                             <Field label="Condition">
-                                <select value={editForm.condition} onChange={(e) => onEditChange({ condition: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
+                                <select value={addForm.condition} onChange={(e) => onAddChange({ condition: e.target.value })} className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20">
                                     {CONDITIONS.map((c) => (
                                         <option key={c} value={c}>
                                             {c}
