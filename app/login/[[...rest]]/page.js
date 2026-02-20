@@ -4,6 +4,7 @@
 import { useMemo, useState } from "react";
 import { useSignIn } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 export default function LoginPage() {
     const router = useRouter();
@@ -52,7 +53,6 @@ export default function LoginPage() {
                 await setActive({ session: res.createdSessionId });
                 router.push("/program");
             } else {
-                // Handle other statuses if needed (e.g., 2FA)
                 setErr("Sign in not complete. Please try again.");
             }
         } catch (e2) {
@@ -70,7 +70,7 @@ export default function LoginPage() {
                 <div className="absolute bottom-10 left-10 h-[420px] w-[420px] rounded-full bg-purple-500/14 blur-3xl" />
             </div>
 
-            {/* Layout that never overlaps a fixed navbar */}
+            {/* Layout */}
             <div className="relative h-full grid grid-rows-[var(--nav-h,80px)_1fr_40px] px-4 sm:px-6 lg:px-10">
                 <div />
 
@@ -112,9 +112,17 @@ export default function LoginPage() {
                                     </div>
 
                                     <div>
-                                        <label className="block text-white/70 text-sm mb-2">
-                                            Password
-                                        </label>
+                                        <div className="flex items-center justify-between mb-2">
+                                            <label className="block text-white/70 text-sm">
+                                                Password
+                                            </label>
+                                            <Link
+                                                href="/forgot-password"
+                                                className="text-sm text-white/50 hover:text-white transition"
+                                            >
+                                                Forgot password?
+                                            </Link>
+                                        </div>
                                         <input
                                             type="password"
                                             value={form.password}
@@ -140,12 +148,12 @@ export default function LoginPage() {
 
                                     <div className="text-sm text-white/60">
                                         Don't have an account?{" "}
-                                        <a
+                                        <Link
                                             href="/signup"
                                             className="text-white hover:text-white/80 underline underline-offset-4"
                                         >
                                             Create one
-                                        </a>
+                                        </Link>
                                     </div>
                                 </form>
                             )}
