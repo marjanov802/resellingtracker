@@ -43,63 +43,23 @@ const platformFromUrl = (url) => {
 
 const upperCurrency = (cur) => String(cur || "GBP").trim().toUpperCase() || "GBP"
 
-// ---- Generic metadata parsing (works for many marketplaces) ----
-
 const getMeta = (html, key) => {
-    // matches:
-    // <meta property="og:title" content="...">
-    // <meta name="twitter:title" content="...">
-    // <meta itemprop="price" content="...">
     const re = new RegExp(
         `<meta[^>]+(?:property|name|itemprop)=["']${escapeReg(key)}["'][^>]*content=["']([^"']+)["'][^>]*>`,
         "i"
     )
     const m = html.match(re)
-    return m ? decodeHtml(m[1]).trim() : ""
+    if (m) return decodeHtml(m[1]).trim()
+
+    const re2 = new RegExp(
+        `<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name|itemprop)=["']${escapeReg(key)}["'][^>]*>`,
+        "i"
+    )
+    const m2 = html.match(re2)
+    return m2 ? decodeHtml(m2[1]).trim() : ""
 }
 
 const escapeReg = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-
-const extractJsonLdBlocks = (html) => {
-    const out = []
-    const re = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
-    let m
-    while ((m = re.exec(html))) {
-        const raw = String(m[1] || "").trim()
-        if (!raw) continue
-        // Some sites include multiple JSON objects or invalid trailing commas; try best-effort
-        try {
-            out.push(JSON.parse(raw))
-        } catch {
-            // try to salvage: strip newlines and attempt to parse first {...} or [...]
-            const trimmed = raw.replace(/\u2028|\u2029/g, "")
-            try {
-                out.push(JSON.parse(trimmed))
-            } catch {
-                // ignore
-            }
-        }
-    }
-    return out
-}
-
-const flattenJsonLd = (node) => {
-    const acc = []
-    const walk = (x) => {
-        if (!x) return
-        if (Array.isArray(x)) return x.forEach(walk)
-        if (typeof x !== "object") return
-        acc.push(x)
-        if (x["@graph"]) walk(x["@graph"])
-        if (x.itemListElement) walk(x.itemListElement)
-        if (x.offers) walk(x.offers)
-        if (x.mainEntity) walk(x.mainEntity)
-        if (x.subjectOf) walk(x.subjectOf)
-        if (x.hasPart) walk(x.hasPart)
-    }
-    walk(node)
-    return acc
-}
 
 const pickFirst = (...vals) => {
     for (const v of vals) {
@@ -109,72 +69,332 @@ const pickFirst = (...vals) => {
     return ""
 }
 
-const parseOffer = (offer) => {
-    if (!offer || typeof offer !== "object") return { price: null, currency: "" }
+// ---- Vinted specialised parsing ----
 
-    // offer.price can be number/string; offer.lowPrice etc.
-    const price =
-        asNumber(offer.price) ??
-        asNumber(offer.lowPrice) ??
-        asNumber(offer.highPrice) ??
-        asNumber(offer.priceSpecification?.price)
+const extractVinted = (html) => {
+    let title = ""
+    let pricePence = null
+    let currency = "GBP"
+    let imageUrl = ""
+    let size = ""
+    let condition = ""
+    let category = ""
 
-    const currency = pickFirst(
-        offer.priceCurrency,
-        offer.priceSpecification?.priceCurrency,
-        offer.currency
-    )
+    // Try to find the JSON data embedded in the page
+    // Vinted often embeds item data in a script tag
+    const jsonMatch = html.match(/<script[^>]*>window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\});\s*<\/script>/) ||
+        html.match(/"itemDto"\s*:\s*(\{[^}]+(?:\{[^}]*\}[^}]*)*\})/)
 
-    return { price, currency }
-}
+    // Title - multiple patterns
+    const titleMatch = html.match(/<h1[^>]*itemprop="name"[^>]*>([^<]+)</) ||
+        html.match(/<h1[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)</) ||
+        html.match(/"title"\s*:\s*"([^"]+)"/) ||
+        html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i) ||
+        html.match(/<meta\s+content="([^"]+)"\s+property="og:title"/i)
+    if (titleMatch) {
+        title = decodeHtml(titleMatch[1]).trim()
+        // Clean up Vinted titles that include "| Vinted" at the end
+        title = title.replace(/\s*\|\s*Vinted.*$/i, "").trim()
+    }
 
-const extractFromJsonLd = (html) => {
-    const blocks = extractJsonLdBlocks(html)
-    const nodes = []
-    for (const b of blocks) nodes.push(...flattenJsonLd(b))
+    // Price - multiple patterns
+    const priceMatch = html.match(/"price_numeric"\s*:\s*([\d.]+)/) ||
+        html.match(/"price"\s*:\s*\{[^}]*"amount"\s*:\s*"?([\d.]+)"?/) ||
+        html.match(/"total_item_price"\s*:\s*\{[^}]*"amount"\s*:\s*"?([\d.]+)"?/) ||
+        html.match(/itemprop="price"[^>]*content="([\d.]+)"/) ||
+        html.match(/<span[^>]*class="[^"]*price[^"]*"[^>]*>[£$€]?\s*([\d,.]+)/) ||
+        html.match(/"price"\s*:\s*"?([\d.]+)"?/)
+    if (priceMatch) {
+        const n = asNumber(priceMatch[1])
+        if (n != null) pricePence = priceToPence(n)
+    }
 
-    // find Product / Offer / AggregateOffer
-    let bestTitle = ""
-    let bestPrice = null
-    let bestCurrency = ""
+    // Size - Vinted specific patterns
+    const sizeMatch = html.match(/"size_title"\s*:\s*"([^"]+)"/) ||
+        html.match(/"size"\s*:\s*"([^"]+)"/) ||
+        html.match(/"size"\s*:\s*\{[^}]*"title"\s*:\s*"([^"]+)"/) ||
+        html.match(/itemprop="size"[^>]*>([^<]+)</) ||
+        html.match(/<span[^>]*class="[^"]*size[^"]*"[^>]*>([^<]+)</) ||
+        html.match(/"details"[\s\S]*?"Size"[\s\S]*?"value"\s*:\s*"([^"]+)"/)
+    if (sizeMatch) {
+        size = decodeHtml(sizeMatch[1]).trim()
+    }
 
-    for (const n of nodes) {
-        const t = String(n["@type"] || "").toLowerCase()
-        const isProduct = t === "product" || (Array.isArray(n["@type"]) && n["@type"].map(String).some((x) => String(x).toLowerCase() === "product"))
-        if (!isProduct) continue
+    // Condition/Status - Vinted uses "status" for condition
+    const conditionMatch = html.match(/"status"\s*:\s*"([^"]+)"/) ||
+        html.match(/"condition"\s*:\s*"([^"]+)"/) ||
+        html.match(/"item_status"\s*:\s*"([^"]+)"/) ||
+        html.match(/itemprop="itemCondition"[^>]*>([^<]+)</) ||
+        html.match(/<span[^>]*class="[^"]*condition[^"]*"[^>]*>([^<]+)</) ||
+        html.match(/"details"[\s\S]*?"Condition"[\s\S]*?"value"\s*:\s*"([^"]+)"/)
+    if (conditionMatch) {
+        condition = decodeHtml(conditionMatch[1]).trim()
+        // Map Vinted conditions to your app's conditions
+        condition = mapVintedCondition(condition)
+    }
 
-        const title = pickFirst(n.name, n.headline)
-        if (title && !bestTitle) bestTitle = title
-
-        const offers = n.offers
-        if (offers) {
-            if (Array.isArray(offers)) {
-                for (const o of offers) {
-                    const { price, currency } = parseOffer(o)
-                    if (price != null && bestPrice == null) {
-                        bestPrice = price
-                        bestCurrency = currency
-                        break
-                    }
-                }
-            } else {
-                const { price, currency } = parseOffer(offers)
-                if (price != null && bestPrice == null) {
-                    bestPrice = price
-                    bestCurrency = currency
-                }
-            }
+    // Category - try to detect if it's clothing or shoes
+    const categoryMatch = html.match(/"catalog_title"\s*:\s*"([^"]+)"/) ||
+        html.match(/"category"\s*:\s*"([^"]+)"/) ||
+        html.match(/"catalog"\s*:\s*\{[^}]*"title"\s*:\s*"([^"]+)"/)
+    if (categoryMatch) {
+        const cat = decodeHtml(categoryMatch[1]).toLowerCase()
+        if (cat.includes("shoe") || cat.includes("trainer") || cat.includes("boot") || cat.includes("sneaker")) {
+            category = "Shoes"
+        } else if (cat.includes("cloth") || cat.includes("shirt") || cat.includes("dress") || cat.includes("jacket") || cat.includes("jean") || cat.includes("trouser") || cat.includes("hoodie") || cat.includes("jumper") || cat.includes("coat")) {
+            category = "Clothes"
+        } else if (cat.includes("bag") || cat.includes("handbag")) {
+            category = "Bags"
+        } else if (cat.includes("watch")) {
+            category = "Watches"
+        } else if (cat.includes("jewel") || cat.includes("necklace") || cat.includes("ring") || cat.includes("bracelet")) {
+            category = "Jewellery"
         }
     }
 
-    if (!bestTitle && bestPrice == null) return null
+    // Image - multiple patterns
+    const photoMatch = html.match(/"photos"\s*:\s*\[\s*\{[^}]*"full_size_url"\s*:\s*"([^"]+)"/) ||
+        html.match(/"full_size_url"\s*:\s*"([^"]+)"/) ||
+        html.match(/"url"\s*:\s*"(https:\/\/[^"]*vinted[^"]*\/photos\/[^"]+)"/) ||
+        html.match(/<meta\s+property="og:image"\s+content="([^"]+)"/i) ||
+        html.match(/<meta\s+content="([^"]+)"\s+property="og:image"/i)
+    if (photoMatch) imageUrl = photoMatch[1]
 
     return {
-        title: clampLen(decodeHtml(bestTitle).trim(), 160),
-        pricePence: priceToPence(bestPrice),
-        currency: upperCurrency(bestCurrency || "GBP"),
+        title: clampLen(title, 160),
+        pricePence,
+        currency,
+        imageUrl: decodeHtml(imageUrl),
+        size,
+        condition,
+        category,
     }
 }
+
+// Map Vinted condition strings to your app's condition values
+const mapVintedCondition = (vintedCondition) => {
+    const c = String(vintedCondition || "").toLowerCase()
+    if (c.includes("new with tag") || c.includes("brand new") || c === "new_with_tags") return "New (with tags)"
+    if (c.includes("new") || c === "new_without_tags") return "New"
+    if (c.includes("very good") || c === "very_good") return "Like new"
+    if (c.includes("good") || c === "good") return "Good"
+    if (c.includes("satisfactory") || c.includes("fair") || c === "satisfactory") return "Fair"
+    if (c.includes("poor") || c.includes("worn")) return "Poor"
+    return vintedCondition // Return original if no match
+}
+
+// ---- eBay specialised parsing ----
+
+const extractEbay = (html) => {
+    let title = ""
+    let pricePence = null
+    let currency = "GBP"
+    let imageUrl = ""
+    let condition = ""
+    let size = ""
+
+    // Title
+    const titleMatch = html.match(/<h1[^>]*class="[^"]*x-item-title__mainTitle[^"]*"[^>]*>\s*<span[^>]*>([^<]+)<\/span>/i) ||
+        html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i) ||
+        html.match(/<title>\s*([^<]+)\s*<\/title>/i)
+    if (titleMatch) {
+        title = decodeHtml(titleMatch[1]).trim()
+        title = title.replace(/\s*\|\s*eBay.*$/i, "").trim()
+    }
+
+    // Price
+    const priceMatch = html.match(/<div[^>]*class="[^"]*x-price-primary[^"]*"[^>]*>[\s\S]*?<span[^>]*>([^<]+)<\/span>/i) ||
+        html.match(/<meta\s+property="og:price:amount"\s+content="([^"]+)"/i) ||
+        html.match(/"price"\s*:\s*"([^"]+)"/i)
+    if (priceMatch) {
+        const n = asNumber(priceMatch[1])
+        if (n != null) pricePence = priceToPence(n)
+    }
+
+    // Currency
+    const currMatch = html.match(/<meta\s+property="og:price:currency"\s+content="([^"]+)"/i) ||
+        html.match(/"priceCurrency"\s*:\s*"([^"]+)"/i)
+    if (currMatch) currency = currMatch[1]
+
+    // Condition
+    const condMatch = html.match(/<span[^>]*class="[^"]*ux-icon-text[^"]*"[^>]*>([^<]*(?:New|Used|Pre-owned|Refurbished|Open box)[^<]*)<\/span>/i) ||
+        html.match(/"conditionDisplayName"\s*:\s*"([^"]+)"/) ||
+        html.match(/<div[^>]*class="[^"]*x-item-condition[^"]*"[^>]*>[\s\S]*?<span[^>]*>([^<]+)<\/span>/i)
+    if (condMatch) {
+        condition = mapEbayCondition(decodeHtml(condMatch[1]).trim())
+    }
+
+    // Size - eBay puts this in item specifics
+    const sizeMatch = html.match(/(?:Size|UK Size|US Size|EU Size)[^:]*:\s*<[^>]*>([^<]+)</) ||
+        html.match(/"Size"\s*:\s*\[\s*"([^"]+)"/) ||
+        html.match(/"Size"\s*:\s*"([^"]+)"/)
+    if (sizeMatch) {
+        size = decodeHtml(sizeMatch[1]).trim()
+    }
+
+    // Image
+    const imgMatch = html.match(/"image"\s*:\s*\[\s*"([^"]+)"/) ||
+        html.match(/<meta\s+property="og:image"\s+content="([^"]+)"/i) ||
+        html.match(/data-zoom-src="([^"]+)"/)
+    if (imgMatch) {
+        imageUrl = imgMatch[1]
+        if (imageUrl.includes("s-l64") || imageUrl.includes("s-l140") || imageUrl.includes("s-l300") || imageUrl.includes("s-l500")) {
+            imageUrl = imageUrl.replace(/s-l\d+/, "s-l1600")
+        }
+    }
+
+    return {
+        title: clampLen(title, 160),
+        pricePence,
+        currency: upperCurrency(currency),
+        imageUrl: decodeHtml(imageUrl),
+        size,
+        condition,
+        category: "",
+    }
+}
+
+const mapEbayCondition = (ebayCondition) => {
+    const c = String(ebayCondition || "").toLowerCase()
+    if (c.includes("new with tag")) return "New (with tags)"
+    if (c.includes("new")) return "New"
+    if (c.includes("like new") || c.includes("excellent")) return "Like new"
+    if (c.includes("very good") || c.includes("pre-owned")) return "Good"
+    if (c.includes("good")) return "Good"
+    if (c.includes("acceptable") || c.includes("fair")) return "Fair"
+    if (c.includes("for parts") || c.includes("poor")) return "Poor"
+    return ebayCondition
+}
+
+// ---- Depop specialised parsing ----
+
+const extractDepop = (html) => {
+    let title = ""
+    let pricePence = null
+    let currency = "GBP"
+    let imageUrl = ""
+    let size = ""
+    let condition = ""
+
+    // Title
+    const titleMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i)
+    if (titleMatch) {
+        title = decodeHtml(titleMatch[1]).trim()
+        title = title.replace(/\s*-\s*Depop.*$/i, "").trim()
+    }
+
+    // Price
+    const priceMatch = html.match(/"price"\s*:\s*\{[^}]*"priceAmount"\s*:\s*"?([\d.]+)"?/) ||
+        html.match(/"priceAmount"\s*:\s*"?([\d.]+)"?/)
+    if (priceMatch) {
+        const n = asNumber(priceMatch[1])
+        if (n != null) pricePence = priceToPence(n)
+    }
+
+    // Currency
+    const currMatch = html.match(/"priceCurrency"\s*:\s*"([A-Z]{3})"/)
+    if (currMatch) currency = currMatch[1]
+
+    // Size
+    const sizeMatch = html.match(/"size"\s*:\s*"([^"]+)"/) ||
+        html.match(/"productSize"\s*:\s*"([^"]+)"/)
+    if (sizeMatch) size = decodeHtml(sizeMatch[1]).trim()
+
+    // Condition
+    const condMatch = html.match(/"condition"\s*:\s*"([^"]+)"/) ||
+        html.match(/"itemCondition"\s*:\s*"([^"]+)"/)
+    if (condMatch) condition = mapDepopCondition(decodeHtml(condMatch[1]).trim())
+
+    // Image
+    const imageMatch = html.match(/<meta\s+property="og:image"\s+content="([^"]+)"/i) ||
+        html.match(/"image"\s*:\s*"([^"]+)"/)
+    if (imageMatch) imageUrl = imageMatch[1]
+
+    return {
+        title: clampLen(title, 160),
+        pricePence,
+        currency: upperCurrency(currency),
+        imageUrl: decodeHtml(imageUrl),
+        size,
+        condition,
+        category: "",
+    }
+}
+
+const mapDepopCondition = (depopCondition) => {
+    const c = String(depopCondition || "").toLowerCase()
+    if (c.includes("brand new") || c.includes("bnwt")) return "New (with tags)"
+    if (c.includes("new")) return "New"
+    if (c.includes("like new") || c.includes("excellent")) return "Like new"
+    if (c.includes("good") || c.includes("used")) return "Good"
+    if (c.includes("fair") || c.includes("worn")) return "Fair"
+    return depopCondition
+}
+
+// ---- Grailed parsing ----
+
+const extractGrailed = (html) => {
+    let title = ""
+    let pricePence = null
+    let currency = "USD"
+    let imageUrl = ""
+    let size = ""
+    let condition = ""
+
+    const titleMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i)
+    if (titleMatch) title = decodeHtml(titleMatch[1]).trim()
+
+    const priceMatch = html.match(/"price"\s*:\s*([\d.]+)/) ||
+        html.match(/"soldPrice"\s*:\s*([\d.]+)/)
+    if (priceMatch) {
+        const n = asNumber(priceMatch[1])
+        if (n != null) pricePence = priceToPence(n)
+    }
+
+    const sizeMatch = html.match(/"size"\s*:\s*"([^"]+)"/)
+    if (sizeMatch) size = decodeHtml(sizeMatch[1]).trim()
+
+    const condMatch = html.match(/"condition"\s*:\s*"([^"]+)"/)
+    if (condMatch) condition = decodeHtml(condMatch[1]).trim()
+
+    const imageMatch = html.match(/<meta\s+property="og:image"\s+content="([^"]+)"/i)
+    if (imageMatch) imageUrl = imageMatch[1]
+
+    return {
+        title: clampLen(title, 160),
+        pricePence,
+        currency,
+        imageUrl: decodeHtml(imageUrl),
+        size,
+        condition,
+        category: "Clothes",
+    }
+}
+
+// ---- Helper to normalize image URL ----
+
+const normalizeImageUrl = (imageUrl, baseUrl) => {
+    if (!imageUrl) return ""
+
+    let url = decodeHtml(imageUrl.trim())
+
+    if (url.startsWith("//")) {
+        url = "https:" + url
+    }
+
+    if (url.startsWith("/") && !url.startsWith("//")) {
+        try {
+            const base = new URL(baseUrl)
+            url = base.origin + url
+        } catch {
+            // ignore
+        }
+    }
+
+    return url
+}
+
+// ---- Fallback OpenGraph parsing ----
 
 const extractFromOpenGraph = (html) => {
     const title = pickFirst(
@@ -185,55 +405,30 @@ const extractFromOpenGraph = (html) => {
 
     const currency = pickFirst(
         getMeta(html, "og:price:currency"),
-        getMeta(html, "product:price:currency"),
-        getMeta(html, "twitter:data1") // sometimes "Price"
+        getMeta(html, "product:price:currency")
     )
 
     const priceStr = pickFirst(
         getMeta(html, "og:price:amount"),
         getMeta(html, "product:price:amount"),
-        getMeta(html, "product:price"),
-        getMeta(html, "twitter:data2"), // sometimes actual number
-        "" // fallback
+        getMeta(html, "product:price")
+    )
+
+    const imageUrl = pickFirst(
+        getMeta(html, "og:image"),
+        getMeta(html, "twitter:image")
     )
 
     const price = asNumber(priceStr)
-
-    if (!title && price == null) return null
 
     return {
         title: clampLen(decodeHtml(title).trim(), 160),
         pricePence: priceToPence(price),
         currency: upperCurrency(currency || "GBP"),
-    }
-}
-
-// ---- eBay specialised parsing (keep because it’s reliable) ----
-
-const extractEbay = (html) => {
-    const title =
-        (html.match(/<h1[^>]*class="[^"]*x-item-title__mainTitle[^"]*"[^>]*>\s*<span[^>]*>([^<]+)<\/span>/i) || [])[1] ||
-        (html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i) || [])[1] ||
-        (html.match(/<title>\s*([^<]+)\s*<\/title>/i) || [])[1] ||
-        ""
-
-    const priceStr =
-        (html.match(/<div[^>]*class="[^"]*x-price-primary[^"]*"[^>]*>[\s\S]*?<span[^>]*>([^<]+)<\/span>/i) || [])[1] ||
-        (html.match(/<meta\s+property="og:price:amount"\s+content="([^"]+)"/i) || [])[1] ||
-        (html.match(/"price"\s*:\s*"([^"]+)"/i) || [])[1] ||
-        ""
-
-    const currency =
-        (html.match(/<meta\s+property="og:price:currency"\s+content="([^"]+)"/i) || [])[1] ||
-        (html.match(/"priceCurrency"\s*:\s*"([^"]+)"/i) || [])[1] ||
-        "GBP"
-
-    const n = asNumber(priceStr)
-
-    return {
-        title: clampLen(decodeHtml(title).trim(), 160),
-        pricePence: priceToPence(n),
-        currency: upperCurrency(currency || "GBP"),
+        imageUrl: imageUrl,
+        size: "",
+        condition: "",
+        category: "",
     }
 }
 
@@ -252,12 +447,10 @@ export async function GET(req) {
         return NextResponse.json({ ok: false, error: "Invalid url" }, { status: 400 })
     }
 
-    // allow https only
     if (url.protocol !== "https:") {
         return NextResponse.json({ ok: false, error: "Only https links supported" }, { status: 400 })
     }
 
-    // allow-list major domains (you can extend this safely)
     const host = url.hostname.toLowerCase()
     const allowed =
         host.endsWith("ebay.co.uk") ||
@@ -305,35 +498,29 @@ export async function GET(req) {
             )
         }
 
-        // Parsing strategy:
-        // 1) platform-specific (eBay)
-        // 2) JSON-LD Product/offers (best across Vinted/Depop/StockX/others)
-        // 3) OpenGraph price tags (fallback)
-        // 4) title-only fallback
         let parsed = null
 
+        // Platform-specific parsers
         if (platform === "EBAY") parsed = extractEbay(html)
-        if (!parsed) parsed = extractFromJsonLd(html)
-        if (!parsed) parsed = extractFromOpenGraph(html)
+        else if (platform === "VINTED") parsed = extractVinted(html)
+        else if (platform === "DEPOP") parsed = extractDepop(html)
+        else if (platform === "GRAILED") parsed = extractGrailed(html)
 
-        if (!parsed) {
-            const t = pickFirst(
-                getMeta(html, "og:title"),
-                getMeta(html, "twitter:title"),
-                (html.match(/<title>\s*([^<]+)\s*<\/title>/i) || [])[1] || ""
-            )
-            parsed = {
-                title: clampLen(decodeHtml(t).trim(), 160),
-                pricePence: null,
-                currency: "GBP",
-            }
+        // Fallback to OpenGraph
+        if (!parsed || (!parsed.title && !parsed.pricePence)) {
+            parsed = extractFromOpenGraph(html)
         }
 
-        // Normalise: if no currency, default GBP (your UI uses currencyView anyway)
+        const imageUrl = normalizeImageUrl(parsed?.imageUrl || "", url.toString())
+
         const data = {
-            title: parsed.title || "",
-            pricePence: parsed.pricePence == null ? null : Number(parsed.pricePence),
-            currency: upperCurrency(parsed.currency || "GBP"),
+            title: parsed?.title || "",
+            pricePence: parsed?.pricePence == null ? null : Number(parsed.pricePence),
+            currency: upperCurrency(parsed?.currency || "GBP"),
+            imageUrl: imageUrl,
+            size: parsed?.size || "",
+            condition: parsed?.condition || "",
+            category: parsed?.category || "",
             platform,
             url: url.toString(),
         }

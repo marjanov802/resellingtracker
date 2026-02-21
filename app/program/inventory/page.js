@@ -1396,6 +1396,16 @@ export default function InventoryPage() {
             const platform = safeStr(d.platform).toUpperCase() || guessedPlatform
             const pricePence = Number(d.pricePence)
             const hasPrice = Number.isFinite(pricePence) && pricePence > 0
+            const imageUrl = safeStr(d.imageUrl) || ""
+            const size = safeStr(d.size) || ""
+            const condition = safeStr(d.condition) || ""
+            const category = safeStr(d.category) || ""
+
+            // Map the imported condition to valid CONDITIONS array values
+            const validCondition = CONDITIONS.includes(condition) ? condition : ""
+
+            // Map the imported category to valid CATEGORIES array values
+            const validCategory = CATEGORIES.includes(category) ? category : ""
 
             setAddForm((p) => ({
                 ...p,
@@ -1404,16 +1414,32 @@ export default function InventoryPage() {
                 listingPlatform: PLATFORMS.some(([v]) => v === platform) ? platform : p.listingPlatform,
                 listingUrl: url,
                 listingPrice: hasPrice ? (pricePence / 100).toFixed(2) : p.listingPrice,
+                imageUrl: imageUrl || p.imageUrl,
+                size: size || p.size,
+                condition: validCondition || p.condition,
+                category: validCategory || p.category,
             }))
 
-            showToast("ok", hasPrice ? "Imported listing (title + price)" : "Imported listing (title only)")
+            // Build a nice toast message showing what was imported
+            const imported = [
+                title ? "title" : "",
+                hasPrice ? "price" : "",
+                imageUrl ? "image" : "",
+                size ? "size" : "",
+                condition ? "condition" : "",
+            ].filter(Boolean)
+
+            if (imported.length > 0) {
+                showToast("ok", `Imported: ${imported.join(", ")}`)
+            } else {
+                showToast("ok", "Imported listing")
+            }
         } catch (e) {
             showToast("error", e?.message || "Import failed")
         } finally {
             setImporting(false)
         }
     }
-
     const submitAdd = async (e) => {
         e?.preventDefault?.()
         const name = String(addForm.title || "").trim()
@@ -2301,20 +2327,7 @@ export default function InventoryPage() {
                                     ))}
                                 </select>
                             </Field>
-                            {(addForm.category === "Clothes" || addForm.category === "Shoes") && (
-                                <Field label="Size *">
-                                    <select
-                                        value={addForm.size}
-                                        onChange={(e) => onAddChange({ size: e.target.value })}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                    >
-                                        <option value="">Select size</option>
-                                        {(addForm.category === "Shoes" ? SHOE_SIZES : CLOTHING_SIZES).map((s) => (
-                                            <option key={s} value={s}>{s}</option>
-                                        ))}
-                                    </select>
-                                </Field>
-                            )}
+
 
                             {(addForm.category === "Clothes" || addForm.category === "Shoes") && (
                                 <Field label="Size *">
@@ -2527,20 +2540,6 @@ export default function InventoryPage() {
                                     ))}
                                 </select>
                             </Field>
-                            {(editForm.category === "Clothes" || editForm.category === "Shoes") && (
-                                <Field label="Size *">
-                                    <select
-                                        value={editForm.size}
-                                        onChange={(e) => onEditChange({ size: e.target.value })}
-                                        className="h-11 w-full rounded-2xl border border-white/10 bg-zinc-950/60 px-4 text-sm text-white outline-none focus:border-white/20"
-                                    >
-                                        <option value="">Select size</option>
-                                        {(editForm.category === "Shoes" ? SHOE_SIZES : CLOTHING_SIZES).map((s) => (
-                                            <option key={s} value={s}>{s}</option>
-                                        ))}
-                                    </select>
-                                </Field>
-                            )}
 
                             {(addForm.category === "Clothes" || addForm.category === "Shoes") && (
                                 <Field label="Size *">
