@@ -121,7 +121,7 @@ function PricingCard({ name, price, period, desc, bullets, popular, cta, planId,
         <SignInButton mode="modal" forceRedirectUrl="/#pricing">
           <button
             className={[
-              "mt-6 inline-flex w-full items-center justify-center rounded-2xl px-4 py-3 text-sm font-semibold transition",
+              "mt-6 inline-flex w-full items-center justify-center rounded-2xl px-4 py-3 text-sm font-semibold transition cursor-pointer",
               popular ? "bg-white text-black hover:bg-white/90" : "bg-white/10 text-white hover:bg-white/15 border border-white/15",
             ].join(" ")}
           >

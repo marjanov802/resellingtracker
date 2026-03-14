@@ -49,8 +49,8 @@ function PricingCard({ name, price, period, desc, bullets, popular, cta, planId,
                     loading
                         ? "bg-neutral-800 text-neutral-500 cursor-not-allowed"
                         : popular
-                            ? "bg-white text-black hover:bg-neutral-200"
-                            : "bg-[#222] text-white hover:bg-[#2a2a2a] border border-[#333]",
+                            ? "bg-white text-black hover:bg-neutral-200 cursor-pointer"
+                            : "bg-[#222] text-white hover:bg-[#2a2a2a] border border-[#333] cursor-pointer",
                 ].join(" ")}
             >
                 {loading ? (
