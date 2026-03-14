@@ -319,7 +319,7 @@ function PeriodControls({ period, onPeriodChange, anchorDateYmd, onAnchorDateCha
                             key={p}
                             onClick={() => onPeriodChange(p)}
                             className={[
-                                "px-4 py-2 rounded-2xl text-sm font-semibold transition border",
+                                "px-4 py-2 rounded-2xl text-sm font-semibold transition border cursor-pointer",
                                 period === p
                                     ? "bg-white text-black border-white/10"
                                     : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white border-white/10",
@@ -394,7 +394,7 @@ function Modal({ title, onClose, children, footer, maxWidth = "max-w-5xl" }) {
                         <div className="text-lg font-semibold text-white">{title}</div>
                         <button
                             onClick={onClose}
-                            className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10"
+                            className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-white/90 hover:bg-white/10 cursor-pointer"
                         >
                             Close
                         </button>
@@ -840,7 +840,7 @@ export default function ProgramDashboard() {
         }))
 
         if (segs.length === 0) {
-            return [{ label: "No sales", value: 1, colour: "rgba(148,163,184,0.3)" }]
+            return [{ label: "No sales", value: 0, colour: "rgba(148,163,184,0.3)" }]
         }
 
         return segs
@@ -1170,7 +1170,7 @@ export default function ProgramDashboard() {
                             <button
                                 type="button"
                                 onClick={loadFx}
-                                className="h-9 rounded-xl border border-white/10 bg-white/10 px-3 text-xs font-semibold text-white/90 hover:bg-white/15"
+                                className="h-9 rounded-xl border border-white/10 bg-white/10 px-3 text-xs font-semibold text-white/90 hover:bg-white/15 cursor-pointer"
                                 title="Refresh exchange rates"
                             >
                                 {fx.loading ? "FX…" : "FX"}
@@ -1183,7 +1183,7 @@ export default function ProgramDashboard() {
                                 loadItems()
                                 loadSales()
                             }}
-                            className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15"
+                            className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15 cursor-pointer"
                         >
                             Refresh
                         </button>
@@ -1265,7 +1265,7 @@ export default function ProgramDashboard() {
                             }
 
                             return (
-                                <button key={action.name} type="button" onClick={action.onClick} className="text-left">
+                                <button key={action.name} type="button" onClick={action.onClick} className="text-left cursor-pointer">
                                     {Inner}
                                 </button>
                             )
@@ -1347,7 +1347,7 @@ export default function ProgramDashboard() {
                         <button
                             type="button"
                             onClick={loadFx}
-                            className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15"
+                            className="h-10 rounded-2xl border border-white/10 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/15 cursor-pointer"
                         >
                             Refresh FX
                         </button>
@@ -1380,7 +1380,7 @@ export default function ProgramDashboard() {
                                 <button
                                     type="button"
                                     onClick={() => setAddItemOpen(false)}
-                                    className="h-11 rounded-2xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white/90 hover:bg-white/10"
+                                    className="h-11 rounded-2xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white/90 hover:bg-white/10 cursor-pointer"
                                 >
                                     Cancel
                                 </button>
@@ -1388,7 +1388,7 @@ export default function ProgramDashboard() {
                                     type="submit"
                                     form="add-item-form"
                                     disabled={addItemSaving}
-                                    className="h-11 rounded-2xl bg-white px-4 text-sm font-semibold text-black hover:bg-white/90 disabled:opacity-60"
+                                    className="h-11 rounded-2xl bg-white px-4 text-sm font-semibold text-black hover:bg-white/90 disabled:opacity-60 cursor-pointer"
                                 >
                                     {addItemSaving ? "Saving…" : "Save item"}
                                 </button>
@@ -1533,7 +1533,7 @@ export default function ProgramDashboard() {
                                             type="button"
                                             onClick={addListingToAddItem}
                                             disabled={!addItemIsListed}
-                                            className="h-11 w-full rounded-2xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white/90 hover:bg-white/10 disabled:opacity-60"
+                                            className="h-11 w-full rounded-2xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white/90 hover:bg-white/10 disabled:opacity-60 cursor-pointer"
                                         >
                                             Add listing
                                         </button>
@@ -1559,7 +1559,7 @@ export default function ProgramDashboard() {
                                                 <button
                                                     type="button"
                                                     onClick={() => removeAddItemListing(idx)}
-                                                    className="h-9 rounded-2xl border border-white/10 bg-white/5 px-3 text-xs font-semibold text-white/90 hover:bg-white/10"
+                                                    className="h-9 rounded-2xl border border-white/10 bg-white/5 px-3 text-xs font-semibold text-white/90 hover:bg-white/10 cursor-pointer"
                                                 >
                                                     Remove
                                                 </button>
@@ -1591,7 +1591,7 @@ export default function ProgramDashboard() {
                                 <button
                                     type="button"
                                     onClick={() => setRecordSaleOpen(false)}
-                                    className="h-11 rounded-2xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white/90 hover:bg-white/10"
+                                    className="h-11 rounded-2xl border border-white/10 bg-white/5 px-4 text-sm font-semibold text-white/90 hover:bg-white/10 cursor-pointer"
                                 >
                                     Cancel
                                 </button>
@@ -1599,7 +1599,7 @@ export default function ProgramDashboard() {
                                     type="submit"
                                     form="record-sale-form"
                                     disabled={recordSaleSaving}
-                                    className="h-11 rounded-2xl bg-white px-4 text-sm font-semibold text-black hover:bg-white/90 disabled:opacity-60"
+                                    className="h-11 rounded-2xl bg-white px-4 text-sm font-semibold text-black hover:bg-white/90 disabled:opacity-60 cursor-pointer"
                                 >
                                     {recordSaleSaving ? "Saving…" : "Save sale"}
                                 </button>
@@ -1706,8 +1706,8 @@ export default function ProgramDashboard() {
                                             className={[
                                                 "h-11 rounded-2xl border px-4 text-sm font-semibold transition",
                                                 saleForm.removeMode === "DECREMENT"
-                                                    ? "border-white/20 bg-white text-black"
-                                                    : "border-white/10 bg-white/5 text-white/80 hover:bg-white/10 hover:text-white",
+                                                    ? "border-white/20 bg-white text-black cursor-pointer"
+                                                    : "border-white/10 bg-white/5 text-white/80 hover:bg-white/10 hover:text-white cursor-pointer",
                                             ].join(" ")}
                                         >
                                             Decrement stock
@@ -1718,8 +1718,8 @@ export default function ProgramDashboard() {
                                             className={[
                                                 "h-11 rounded-2xl border px-4 text-sm font-semibold transition",
                                                 saleForm.removeMode === "DELETE"
-                                                    ? "border-white/20 bg-white text-black"
-                                                    : "border-white/10 bg-white/5 text-white/80 hover:bg-white/10 hover:text-white",
+                                                    ? "border-white/20 bg-white text-black cursor-pointer"
+                                                    : "border-white/10 bg-white/5 text-white/80 hover:bg-white/10 hover:text-white cursor-pointer",
                                             ].join(" ")}
                                         >
                                             Delete item

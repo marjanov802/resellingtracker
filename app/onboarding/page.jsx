@@ -9,7 +9,7 @@ function PricingCard({ name, price, period, desc, bullets, popular, cta, planId,
     return (
         <div
             className={[
-                "relative rounded-2xl border p-6",
+                "relative rounded-2xl border p-6 cursor-pointer",
                 popular
                     ? "border-white/20 bg-[#161616]"
                     : "border-[#222] bg-[#111]",
@@ -199,7 +199,7 @@ export default function OnboardingPage() {
     return (
         <main className="min-h-screen bg-[#0a0a0a]">
             {/* Content */}
-            <div className="max-w-6xl mx-auto px-4 sm:px-6 py-12 sm:py-20">
+            <div className="max-w-6xl mx-auto px-4 sm:px-6 py-20 sm:py-32">
                 {/* Header */}
                 <div className="text-center max-w-xl mx-auto">
                     <h1 className="text-2xl sm:text-3xl font-bold text-white">
@@ -241,7 +241,7 @@ export default function OnboardingPage() {
 
                     <button
                         onClick={handleCancel}
-                        className="text-sm text-neutral-500 hover:text-white transition"
+                        className="text-sm text-neutral-500 hover:text-white transition cursor-pointer"
                     >
                         Cancel and sign out
                     </button>

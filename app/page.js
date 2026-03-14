@@ -62,7 +62,7 @@ function PricingCard({ name, price, period, desc, bullets, popular, cta, planId,
   return (
     <div
       className={[
-        "relative rounded-3xl border p-7 backdrop-blur-xl",
+        "relative rounded-3xl border p-7 backdrop-blur-xl cursor-pointer",
         popular ? "border-white/20 bg-white/10 shadow-[0_24px_80px_rgba(0,0,0,0.55)]" : "border-white/10 bg-white/5",
       ].join(" ")}
     >
